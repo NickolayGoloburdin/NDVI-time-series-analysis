@@ -2,14 +2,14 @@
 NDVI Time Series Analysis and Forecasting System
 ==============================================
 
-Модульная система для анализа временных рядов NDVI с использованием LSTM и multi-head attention.
+Modular system for NDVI time series analysis using LSTM and multi-head attention.
 
-Основные компоненты:
-- DataManager: управление данными NDVI и погоды
-- ModelTrainer: обучение нейронных сетей
-- NDVIPredictor: генерация прогнозов
-- ConfigManager: управление конфигурацией
-- DebugLogger: система отладки
+Main components:
+- DataManager: NDVI and weather data management
+- ModelTrainer: neural network training
+- NDVIPredictor: forecast generation
+- ConfigManager: configuration management
+- DebugLogger: debugging system
 """
 
 import os
@@ -35,10 +35,10 @@ from retry_requests import retry
 
 warnings.filterwarnings("ignore")
 
-# ===================== КОНСТАНТЫ =====================
+# ===================== CONSTANTS =====================
 @dataclass
 class ModelConfig:
-    """Конфигурация модели"""
+    """Model configuration"""
     LSTM_UNITS: int = 244
     NUM_LAYERS: int = 1
     DROPOUT_RATE: float = 0.2887856831106061
@@ -50,7 +50,7 @@ class ModelConfig:
 
 @dataclass
 class DataConfig:
-    """Конфигурация данных"""
+    """Data configuration"""
     RESAMPLE_FREQUENCY: str = '5D'
     CLOUD_PERCENTAGE_THRESHOLD: int = 70
     SCALE_FACTOR: int = 10000
@@ -62,17 +62,17 @@ class DataConfig:
 WEIGHTS_DIR = "weights"
 CONFIG_FILE = "configs/config_ndvi.json"
 CACHE_FILE = ".cache"
-RESULTS_DIR = "results"  # Изменено с images на results
+RESULTS_DIR = "results"  # Changed from images to results
 SERVICE_ACCOUNT_FILE = "key.json"
 
-# ===================== ВСПОМОГАТЕЛЬНЫЕ КЛАССЫ =====================
+# ===================== HELPER CLASSES =====================
 
 class DebugLogger:
-    """Система отладки и логирования"""
+    """Debugging and logging system"""
     
     @staticmethod
     def log_data_shape(name: str, data: Any) -> None:
-        """Логирует форму данных"""
+        """Logs data shape"""
         if hasattr(data, 'shape'):
             print(f"📊 {name}: shape = {data.shape}")
         elif isinstance(data, (list, tuple)):
@@ -84,82 +84,82 @@ class DebugLogger:
     
     @staticmethod
     def log_ndvi_stats(ndvi_values: List[float], source: str = "API") -> None:
-        """Логирует статистику NDVI"""
+        """Logs NDVI statistics"""
         if not ndvi_values:
-            print(f"⚠️  {source}: Нет данных NDVI")
+            print(f"⚠️  {source}: No NDVI data")
             return
             
         min_val, max_val = min(ndvi_values), max(ndvi_values)
         mean_val = np.mean(ndvi_values)
         
-        print(f"🌿 {source} NDVI статистика:")
-        print(f"   📈 Диапазон: {min_val:.3f} - {max_val:.3f}")
-        print(f"   📊 Среднее: {mean_val:.3f}")
-        print(f"   📋 Количество: {len(ndvi_values)}")
+        print(f"🌿 {source} NDVI statistics:")
+        print(f"   📈 Range: {min_val:.3f} - {max_val:.3f}")
+        print(f"   📊 Mean: {mean_val:.3f}")
+        print(f"   📋 Count: {len(ndvi_values)}")
         
-        # Оценка качества
+        # Quality assessment
         if max_val < 0:
-            print("   ⚠️  Все значения отрицательные - проблемная область!")
+            print("   ⚠️  All negative values - problematic area!")
         elif max_val > 0.8:
-            print("   ✅ Высокие значения - здоровая растительность")
+            print("   ✅ High values - healthy vegetation")
         elif max_val > 0.3:
-            print("   ✅ Умеренные значения - нормальная растительность")
+            print("   ✅ Moderate values - normal vegetation")
         else:
-            print("   ⚠️  Низкие значения - слабая растительность")
+            print("   ⚠️  Low values - weak vegetation")
     
     @staticmethod
     def log_training_progress(epoch: int, total_epochs: int, loss: float, model_name: str) -> None:
-        """Логирует прогресс обучения"""
+        """Logs training progress"""
         if (epoch + 1) % 20 == 0 or epoch + 1 == total_epochs:
             progress = (epoch + 1) / total_epochs * 100
             print(f"🚀 {model_name}: Epoch [{epoch+1}/{total_epochs}] ({progress:.1f}%) - Loss: {loss:.6f}")
 
 class ConfigManager:
-    """Управление конфигурацией"""
+    """Configuration management"""
     
     @staticmethod
     def load_config(config_path: str = CONFIG_FILE) -> Dict[str, Any]:
-        """Загружает конфигурацию из JSON файла"""
+        """Loads configuration from JSON file"""
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
             
-            print(f"✅ Конфигурация загружена из {config_path}")
-            print(f"📍 Координаты: {len(config['coordinates'])} точек")
-            print(f"📅 Период: {config['start_date']} - {config['end_date']}")
-            print(f"🔧 Параметры: n_steps_in={config['n_steps_in']}, n_steps_out={config['n_steps_out']}")
+            print(f"✅ Configuration loaded from {config_path}")
+            print(f"📍 Coordinates: {len(config['coordinates'])} points")
+            print(f"📅 Period: {config['start_date']} - {config['end_date']}")
+            print(f"🔧 Parameters: n_steps_in={config['n_steps_in']}, n_steps_out={config['n_steps_out']}")
             
             return config
         except FileNotFoundError:
-            raise FileNotFoundError(f"Файл конфигурации {config_path} не найден")
+            raise FileNotFoundError(f"Configuration file {config_path} not found")
         except json.JSONDecodeError:
-            raise ValueError(f"Некорректный JSON в файле {config_path}")
+            raise ValueError(f"Invalid JSON in file {config_path}")
     
     @staticmethod
     def validate_config(config: Dict[str, Any]) -> None:
-        """Валидирует конфигурацию"""
+        """Validates configuration"""
         required_keys = ['coordinates', 'start_date', 'end_date', 'n_steps_in', 'n_steps_out']
         missing_keys = [key for key in required_keys if key not in config]
         
         if missing_keys:
-            raise ValueError(f"Отсутствуют обязательные параметры: {missing_keys}")
+            raise ValueError(f"Missing required parameters: {missing_keys}")
         
         if config['n_steps_in'] <= 0 or config['n_steps_out'] <= 0:
-            raise ValueError("n_steps_in и n_steps_out должны быть положительными")
+            raise ValueError("n_steps_in and n_steps_out must be positive")
         
-        print("✅ Конфигурация валидна")
+        print("✅ Configuration is valid")
 
-# ===================== МОДЕЛЬ LSTM =====================
+# ===================== LSTM MODEL =====================
 
 class LSTMModel(nn.Module):
-    """LSTM модель с multi-head attention"""
+    """LSTM model with multi-head attention"""
     
     def __init__(self, input_size: int, config: ModelConfig):
         super(LSTMModel, self).__init__()
         self.hidden_size = config.LSTM_UNITS
         self.num_layers = config.NUM_LAYERS
         
-        # LSTM слой
+        # LSTM layer
         self.lstm = nn.LSTM(
             input_size, 
             self.hidden_size, 
@@ -174,15 +174,15 @@ class LSTMModel(nn.Module):
             num_heads=config.ATTENTION_HEADS
         )
         
-        # Нормализация и выходной слой
+        # Normalization and output layer
         self.layer_norm = nn.LayerNorm(self.hidden_size)
         self.dropout = nn.Dropout(config.DROPOUT_RATE)
-        self.fc = nn.Linear(self.hidden_size, 1)  # Выход только 1 значение
+        self.fc = nn.Linear(self.hidden_size, 1)  # Output only 1 value
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch_size, seq_len = x.size(0), x.size(1)
         
-        # Инициализация скрытых состояний
+        # Initialize hidden states
         h0 = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=x.device)
         c0 = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=x.device)
         
@@ -202,13 +202,13 @@ class LSTMModel(nn.Module):
         output = self.layer_norm(lstm_out + attn_output)
         output = self.dropout(output)
         
-        # Выходной слой (только последний временной шаг)
+        # Output layer (only last time step)
         return self.fc(output[:, -1, :])
 
-# ===================== УПРАВЛЕНИЕ ДАННЫМИ =====================
+# ===================== DATA MANAGEMENT =====================
 
 class DataManager:
-    """Управление данными NDVI и погоды"""
+    """NDVI and weather data management"""
     
     def __init__(self, coordinates: List[Tuple[float, float]], service_account_file: str = SERVICE_ACCOUNT_FILE):
         self.coordinates = coordinates
@@ -222,16 +222,16 @@ class DataManager:
         self.scaler_y_smoothed = MinMaxScaler()
         
     def _initialize_ee(self) -> None:
-        """Инициализация Google Earth Engine"""
+        """Initialize Google Earth Engine"""
         try:
-            # Проверяем существование файла ключа
+            # Check if the key file exists
             if not os.path.exists(self.service_account_file):
                 raise FileNotFoundError(
-                    f"Файл ключа {self.service_account_file} не найден. "
-                    f"Скопируйте key.json.example в key.json и заполните своими данными."
+                    f"Key file {self.service_account_file} not found. "
+                    f"Copy key.json.example to key.json and fill in your data."
                 )
             
-            # Загружаем credentials из JSON файла
+            # Load credentials from JSON file
             with open(self.service_account_file, 'r') as f:
                 service_account_info = json.load(f)
             
@@ -240,27 +240,27 @@ class DataManager:
                 self.service_account_file
             )
             ee.Initialize(credentials)
-            print("✅ Google Earth Engine инициализирован с ключом из файла")
+            print("✅ Google Earth Engine initialized with key from file")
             
         except FileNotFoundError as e:
             print(f"❌ {e}")
-            print("💡 Создайте файл key.json на основе key.json.example")
+            print("💡 Create key.json on the basis of key.json.example")
             raise
         except Exception as e:
-            print(f"❌ Ошибка инициализации GEE: {e}")
-            print("💡 Проверьте правильность данных в key.json")
+            print(f"❌ Error initializing GEE: {e}")
+            print("💡 Check the correctness of the data in key.json")
             raise
     
     def _setup_weather_client(self) -> None:
-        """Настройка клиента погодных данных"""
+        """Setup weather data client"""
         cache_session = requests_cache.CachedSession(CACHE_FILE, expire_after=3600)
         retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
         self.weather_client = openmeteo_requests.Client(session=retry_session)
-        print("✅ Клиент погодных данных настроен")
+        print("✅ Weather data client set up")
     
     def get_ndvi_data(self, start_date: str, end_date: str) -> pd.DataFrame:
-        """Получает данные NDVI через Google Earth Engine"""
-        print(f"🛰️  Получение NDVI данных: {start_date} - {end_date}")
+        """Get NDVI data through Google Earth Engine"""
+        print(f"🛰️  Getting NDVI data: {start_date} - {end_date}")
         
         aoi = ee.Geometry.Polygon([self.coordinates])
         collection = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
@@ -284,7 +284,7 @@ class DataManager:
         ndvi_collection = collection.filterBounds(aoi).select('NDVI').map(compute_ndvi)
         ndvi_info = ndvi_collection.getInfo()
         
-        # Извлечение данных
+        # Extract data
         dates, ndvi_values = [], []
         for feature in ndvi_info['features']:
             props = feature['properties']
@@ -292,7 +292,7 @@ class DataManager:
                 dates.append(props['date'])
                 ndvi_values.append(props['NDVI'])
         
-        # Отладка
+        # Debug
         DebugLogger.log_ndvi_stats(ndvi_values, "GEE API")
         
         df = pd.DataFrame({
@@ -300,11 +300,11 @@ class DataManager:
             'NDVI': ndvi_values
         })
         
-        print(f"✅ Получено {len(df)} записей NDVI")
+        print(f"✅ Got {len(df)} NDVI records")
         return df.sort_values('Date').reset_index(drop=True)
     
     def _mask_clouds(self, image):
-        """Маскировка облаков"""
+        """Mask clouds"""
         qa = image.select('QA60')
         scl = image.select('SCL')
         cloud_mask = (qa.bitwiseAnd(1 << 10).eq(0)
@@ -318,20 +318,20 @@ class DataManager:
                     .copyProperties(image, ["system:time_start"]))
     
     def _calculate_ndvi(self, image):
-        """Вычисление NDVI"""
+        """Calculate NDVI"""
         ndvi = image.normalizedDifference(['B8', 'B4']).rename('NDVI')
         return image.addBands(ndvi)
     
     def get_weather_data(self, start_date: str, end_date: str) -> pd.DataFrame:
-        """Получает погодные данные"""
-        print(f"🌤️  Получение погодных данных: {start_date} - {end_date}")
+        """Get weather data"""
+        print(f"🌤️  Getting weather data: {start_date} - {end_date}")
         
-        # Центр полигона
+        # Polygon center
         lats = [coord[0] for coord in self.coordinates]
         lons = [coord[1] for coord in self.coordinates]
         centroid_lat, centroid_lon = np.mean(lats), np.mean(lons)
         
-        print(f"📍 Центр области: {centroid_lat:.3f}, {centroid_lon:.3f}")
+        print(f"📍 Polygon center: {centroid_lat:.3f}, {centroid_lon:.3f}")
         
         params = {
             "latitude": centroid_lat,
@@ -346,18 +346,18 @@ class DataManager:
         responses = self.weather_client.weather_api(url, params=params)
         response = responses[0]
         
-        # Обработка данных
+        # Data processing
         weather_df = self._process_weather_response(response)
         weather_df = self._validate_weather_data(weather_df)
         
-        print(f"✅ Получено {len(weather_df)} записей погоды")
+        print(f"✅ Got {len(weather_df)} weather records")
         DebugLogger.log_data_shape("Weather data", weather_df)
         
         return weather_df
     
     def _process_weather_response(self, response) -> pd.DataFrame:
-        """Обрабатывает ответ погодного API"""
-        # Дневные данные
+        """Process weather API response"""
+        # Daily data
         daily = response.Daily()
         daily_dates = pd.date_range(
             start=pd.to_datetime(daily.Time(), unit="s", utc=True),
@@ -373,7 +373,7 @@ class DataManager:
         })
         daily_df["Date"] = daily_df["Date"].dt.tz_localize(None)
         
-        # Почасовые данные
+        # Hourly data
         hourly = response.Hourly()
         hourly_dates = pd.date_range(
             start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
@@ -389,7 +389,7 @@ class DataManager:
             "precipitation": hourly.Variables(2).ValuesAsNumpy()
         })
         
-        # Агрегация по дням
+        # Daily aggregation
         daily_hourly = hourly_df.groupby(hourly_df["DateTime"].dt.date).agg({
             "temperature_2m": "mean",
             "relative_humidity_2m": "mean",
@@ -397,7 +397,7 @@ class DataManager:
         }).reset_index()
         daily_hourly["Date"] = pd.to_datetime(daily_hourly["DateTime"]).dt.tz_localize(None)
         
-        # Объединение
+        # Merge
         weather_df = pd.merge(daily_df, daily_hourly, on="Date", how="inner")
         weather_df = weather_df.rename(columns={
             "relative_humidity_2m": "RelativeHumidity",
@@ -407,7 +407,7 @@ class DataManager:
         return weather_df[["Date", "TempMin", "TempMax", "RelativeHumidity", "Precipitation"]]
     
     def _validate_weather_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Валидирует погодные данные"""
+        """Validate weather data"""
         initial_count = len(df)
         
         df = df[
@@ -422,28 +422,28 @@ class DataManager:
         
         filtered_count = initial_count - len(df)
         if filtered_count > 0:
-            print(f"⚠️  Отфильтровано {filtered_count} некорректных записей погоды")
+            print(f"⚠️  Filtered out {filtered_count} incorrect weather records")
         
         return df
     
     def process_data(self, ndvi_df: pd.DataFrame, weather_df: pd.DataFrame, 
                     percentile: float, bimonthly_period: str, 
                     spline_smoothing: float) -> pd.DataFrame:
-        """Обрабатывает и объединяет данные NDVI и погоды"""
-        print("🔄 Обработка и объединение данных...")
+        """Process and merge NDVI and weather data"""
+        print("🔄 Processing and merging data...")
         
-        # Интерполяция NDVI
+        # Interpolation of NDVI
         ndvi_df = self._interpolate_data(ndvi_df)
-        DebugLogger.log_data_shape("NDVI после интерполяции", ndvi_df)
+        DebugLogger.log_data_shape("NDVI after interpolation", ndvi_df)
         
-        # Фильтрация выбросов
+        # Outlier filtering
         ndvi_df = self._filter_outliers(ndvi_df, percentile, bimonthly_period)
-        DebugLogger.log_data_shape("NDVI после фильтрации", ndvi_df)
+        DebugLogger.log_data_shape("NDVI after filtering", ndvi_df)
         
-        # Повторная интерполяция
+        # Re-interpolation
         ndvi_df = self._interpolate_data(ndvi_df)
         
-        # Объединение с погодными данными
+        # Merge with weather data
         merged_df = pd.merge_asof(
             ndvi_df.sort_values('Date'), 
             weather_df.sort_values('Date'), 
@@ -451,22 +451,22 @@ class DataManager:
             direction='nearest'
         )
         
-        # Сглаживание NDVI
+        # Smoothing of NDVI
         merged_df['NDVI_Smoothed'] = self._smooth_data(merged_df, spline_smoothing)
         
-        print(f"✅ Объединено {len(merged_df)} записей")
-        DebugLogger.log_data_shape("Финальные данные", merged_df)
+        print(f"✅ Merged {len(merged_df)} records")
+        DebugLogger.log_data_shape("Final data", merged_df)
         
         return merged_df
     
     def _interpolate_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Интерполяция данных с фиксированным шагом"""
-        # Проверка на дубликаты дат
+        """Interpolation of data with fixed step"""
+        # Check for date duplicates
         duplicates_count = df['Date'].duplicated().sum()
         if duplicates_count > 0:
-            print(f"🔍 Найдено {duplicates_count} дубликатов дат, удаляем...")
+            print(f"🔍 Found {duplicates_count} date duplicates, removing...")
         
-        # Удаляем дубликаты дат, оставляя первое вхождение
+        # Remove date duplicates, keeping the first occurrence
         df_clean = df.drop_duplicates(subset=['Date'], keep='first')
         
         df_indexed = df_clean.set_index('Date')
@@ -474,7 +474,7 @@ class DataManager:
         return df_resampled.reset_index()
     
     def _filter_outliers(self, df: pd.DataFrame, percentile: float, period: str) -> pd.DataFrame:
-        """Фильтрация выбросов по перцентилю"""
+        """Outlier filtering by percentile"""
         df = df.copy()
         df['Period'] = df['Date'].dt.to_period(period)
         
@@ -485,14 +485,14 @@ class DataManager:
         removed_count = len(df) - len(filtered_df)
         
         if removed_count > 0:
-            print(f"🔍 Отфильтровано {removed_count} выбросов ({percentile}% перцентиль)")
+            print(f"🔍 Filtered out {removed_count} outliers ({percentile}% percentile)")
         
         return filtered_df.drop(columns=['Period', 'NDVI_threshold'])
     
     def _smooth_data(self, df: pd.DataFrame, smoothing: float) -> np.ndarray:
-        """Сглаживание данных сплайном"""
+        """Smoothing data with spline"""
         if len(df) < 4:
-            print("⚠️  Недостаточно данных для сглаживания")
+            print("⚠️  Not enough data for smoothing")
             return df['NDVI'].values
         
         x_ordinal = df['Date'].map(pd.Timestamp.toordinal)
@@ -500,27 +500,27 @@ class DataManager:
         return spline(x_ordinal)
     
     def prepare_sequences(self, df: pd.DataFrame, n_steps_in: int, n_steps_out: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
-        """Подготавливает последовательности для обучения"""
-        print(f"📦 Подготовка последовательностей: {n_steps_in} входных → {n_steps_out} выходных")
+        """Prepare sequences for training"""
+        print(f"📦 Preparing sequences: {n_steps_in} inputs → {n_steps_out} outputs")
         
-        # Масштабирование
+        # Scaling
         features = ['TempMin', 'TempMax', 'RelativeHumidity', 'Precipitation']
         X_scaled = self.scaler_x.fit_transform(df[features])
         y_scaled = self.scaler_y.fit_transform(df[['NDVI']])
         y_smoothed_scaled = self.scaler_y_smoothed.fit_transform(df[['NDVI_Smoothed']])
         
-        # Создание последовательностей
+        # Create sequences
         X, y_original, y_smoothed = [], [], []
         
         for i in range(len(df) - n_steps_in - n_steps_out + 1):
-            # Входная последовательность (признаки + NDVI)
+            # Input sequence (features + NDVI)
             input_seq = np.hstack([
                 X_scaled[i:i+n_steps_in],
                 y_scaled[i:i+n_steps_in]
             ])
             X.append(input_seq)
             
-            # Выходные последовательности
+            # Output sequences
             y_original.append(y_scaled[i+n_steps_in:i+n_steps_in+n_steps_out].flatten())
             y_smoothed.append(y_smoothed_scaled[i+n_steps_in:i+n_steps_in+n_steps_out].flatten())
         
@@ -528,47 +528,47 @@ class DataManager:
         y_original = np.array(y_original)
         y_smoothed = np.array(y_smoothed)
         
-        print(f"✅ Создано последовательностей: {len(X)}")
-        DebugLogger.log_data_shape("X (входы)", X)
+        print(f"✅ Created sequences: {len(X)}")
+        DebugLogger.log_data_shape("X (inputs)", X)
         DebugLogger.log_data_shape("y_original", y_original)
         DebugLogger.log_data_shape("y_smoothed", y_smoothed)
         
         return X, y_original, y_smoothed, X.shape[2]
 
-# ===================== ОБУЧЕНИЕ МОДЕЛЕЙ =====================
+# ===================== MODEL TRAINING =====================
 
 class ModelTrainer:
-    """Обучение LSTM моделей"""
+    """LSTM model training"""
     
     def __init__(self, config: ModelConfig):
         self.config = config
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"🖥️  Устройство для обучения: {self.device}")
+        print(f"🖥️  Training device: {self.device}")
         
         if self.device.type == 'cuda':
             print(f"🚀 GPU: {torch.cuda.get_device_name(0)}")
-            print(f"💾 Память GPU: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+            print(f"💾 GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
     
     def create_model(self, input_size: int) -> LSTMModel:
-        """Создает модель LSTM"""
+        """Create LSTM model"""
         model = LSTMModel(input_size, self.config).to(self.device)
         
-        # Подсчет параметров
+        # Parameter count
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         
-        print(f"🧠 Модель создана:")
-        print(f"   📊 Всего параметров: {total_params:,}")
-        print(f"   🎯 Обучаемых параметров: {trainable_params:,}")
+        print(f"🧠 Model created:")
+        print(f"   📊 Total parameters: {total_params:,}")
+        print(f"   🎯 Trainable parameters: {trainable_params:,}")
         
         return model
     
     def train_model(self, model: LSTMModel, X: np.ndarray, y: np.ndarray, model_name: str) -> LSTMModel:
-        """Обучает одну модель"""
-        print(f"\n🚀 Начало обучения модели: {model_name}")
-        print(f"📊 Данные: {X.shape[0]} последовательностей")
+        """Train one model"""
+        print(f"\n🚀 Starting model training: {model_name}")
+        print(f"📊 Data: {X.shape[0]} sequences")
         
-        # Подготовка данных
+        # Data preparation
         X_tensor = torch.FloatTensor(X).to(self.device)
         y_tensor = torch.FloatTensor(y).to(self.device)
         
@@ -577,10 +577,10 @@ class ModelTrainer:
             dataset, 
             batch_size=self.config.BATCH_SIZE, 
             shuffle=True,
-            num_workers=0  # Для стабильности
+            num_workers=0  # For stability
         )
         
-        # Оптимизатор и функция потерь
+        # Optimizer and loss function
         criterion = nn.MSELoss()
         optimizer = optim.Adam(
             model.parameters(), 
@@ -588,7 +588,7 @@ class ModelTrainer:
             weight_decay=self.config.WEIGHT_DECAY
         )
         
-        # Обучение
+        # Training
         model.train()
         loss_history = []
         
@@ -599,16 +599,16 @@ class ModelTrainer:
             for batch_X, batch_y in dataloader:
                 optimizer.zero_grad()
                 
-                # Прямой проход
+                # Forward pass
                 outputs = model(batch_X)
                 
-                # Функция потерь (усредняем по выходным шагам)
+                # Loss function (averaged over output steps)
                 loss = criterion(outputs.squeeze(), batch_y.mean(dim=1))
                 
-                # Обратное распространение
+                # Backpropagation
                 loss.backward()
                 
-                # Градиентный клиппинг
+                # Gradient clipping
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 
                 optimizer.step()
@@ -619,16 +619,16 @@ class ModelTrainer:
             avg_loss = epoch_loss / batch_count
             loss_history.append(avg_loss)
             
-            # Логирование
+            # Logging
             DebugLogger.log_training_progress(epoch, self.config.EPOCHS, avg_loss, model_name)
         
-        print(f"✅ Обучение {model_name} завершено. Финальная потеря: {loss_history[-1]:.6f}")
+        print(f"✅ Training {model_name} completed. Final loss: {loss_history[-1]:.6f}")
         
         model.eval()
         return model
     
     def save_models(self, model_original: LSTMModel, model_smoothed: LSTMModel) -> None:
-        """Сохраняет веса моделей"""
+        """Save model weights"""
         os.makedirs(WEIGHTS_DIR, exist_ok=True)
         
         original_path = os.path.join(WEIGHTS_DIR, "model_weights_original.pth")
@@ -637,24 +637,24 @@ class ModelTrainer:
         torch.save(model_original.state_dict(), original_path)
         torch.save(model_smoothed.state_dict(), smoothed_path)
         
-        print(f"💾 Модели сохранены:")
+        print(f"💾 Models saved:")
         print(f"   📁 Original: {original_path}")
         print(f"   📁 Smoothed: {smoothed_path}")
 
-# ===================== ГЛАВНЫЙ КЛАСС =====================
+# ===================== MAIN CLASS =====================
 
 class NDVIForecaster:
-    """Главный класс для прогнозирования NDVI"""
+    """Main class for NDVI forecasting"""
     
     def __init__(self, config_path: str = CONFIG_FILE):
-        print("🌿 Инициализация системы прогнозирования NDVI")
+        print("🌿 Initializing NDVI forecasting system")
         print("=" * 60)
         
-        # Загрузка конфигурации
+        # Load configuration
         self.config = ConfigManager.load_config(config_path)
         ConfigManager.validate_config(self.config)
         
-        # Извлечение параметров
+        # Extract parameters
         self.coordinates = [tuple(coord) for coord in self.config["coordinates"]]
         self.start_date = self.config["start_date"]
         self.end_date = self.config["end_date"]
@@ -664,61 +664,61 @@ class NDVIForecaster:
         self.bimonthly_period = self.config.get("bimonthly_period", "2M")
         self.spline_smoothing = self.config.get("spline_smoothing", 0.7)
         
-        # Инициализация компонентов
+        # Initialize components
         self.data_manager = DataManager(self.coordinates)
         self.model_trainer = ModelTrainer(ModelConfig())
         
-        # Данные и модели
+        # Data and models
         self.merged_df = None
         self.model_original = None
         self.model_filtered = None
         
-        print("✅ Система инициализирована")
+        print("✅ System initialized")
         print("=" * 60)
     
     def load_and_process_data(self) -> None:
-        """Загружает и обрабатывает все данные"""
-        print("\n📡 ЗАГРУЗКА И ОБРАБОТКА ДАННЫХ")
+        """Load and process all data"""
+        print("\n📡 DATA LOADING AND PROCESSING")
         print("=" * 40)
         
-        # Получение данных
+        # Get data
         ndvi_df = self.data_manager.get_ndvi_data(self.start_date, self.end_date)
         weather_df = self.data_manager.get_weather_data(self.start_date, self.end_date)
         
-        # Обработка и объединение
+        # Processing and merging
         self.merged_df = self.data_manager.process_data(
             ndvi_df, weather_df, 
             self.percentile, self.bimonthly_period, self.spline_smoothing
         )
         
-        # Статистика финальных данных
-        print(f"\n📊 ФИНАЛЬНАЯ СТАТИСТИКА ДАННЫХ:")
-        print(f"   📅 Период: {self.merged_df['Date'].min()} - {self.merged_df['Date'].max()}")
-        print(f"   📋 Записей: {len(self.merged_df)}")
+        # Final data statistics
+        print(f"\n📊 FINAL DATA STATISTICS:")
+        print(f"   📅 Period: {self.merged_df['Date'].min()} - {self.merged_df['Date'].max()}")
+        print(f"   📋 Records: {len(self.merged_df)}")
         
         ndvi_stats = self.merged_df['NDVI'].describe()
         print(f"   🌿 NDVI: min={ndvi_stats['min']:.3f}, max={ndvi_stats['max']:.3f}, mean={ndvi_stats['mean']:.3f}")
         
         smoothed_stats = self.merged_df['NDVI_Smoothed'].describe()
-        print(f"   🌿 NDVI (сглаж): min={smoothed_stats['min']:.3f}, max={smoothed_stats['max']:.3f}, mean={smoothed_stats['mean']:.3f}")
+        print(f"   🌿 NDVI (smoothed): min={smoothed_stats['min']:.3f}, max={smoothed_stats['max']:.3f}, mean={smoothed_stats['mean']:.3f}")
     
     def train_models(self) -> None:
-        """Обучает модели"""
+        """Train models"""
         if self.merged_df is None:
-            raise ValueError("Сначала загрузите данные с помощью load_and_process_data()")
+            raise ValueError("First load data using load_and_process_data()")
         
-        print("\n🧠 ОБУЧЕНИЕ МОДЕЛЕЙ")
+        print("\n🧠 MODEL TRAINING")
         print("=" * 40)
         
-        # Подготовка последовательностей
+        # Prepare sequences
         X, y_original, y_smoothed, input_size = self.data_manager.prepare_sequences(
             self.merged_df, self.n_steps_in, self.n_steps_out
         )
         
         if len(X) == 0:
-            raise ValueError("Недостаточно данных для создания последовательностей")
+            raise ValueError("Not enough data to create sequences")
         
-        # Создание и обучение моделей
+        # Create and train models
         self.model_original = self.model_trainer.create_model(input_size)
         self.model_filtered = self.model_trainer.create_model(input_size)
         
@@ -729,12 +729,12 @@ class NDVIForecaster:
             self.model_filtered, X, y_smoothed, "Smoothed"
         )
         
-        # Сохранение
+        # Save
         self.model_trainer.save_models(self.model_original, self.model_filtered)
     
     def run_training_pipeline(self) -> None:
-        """Выполняет полный пайплайн обучения"""
-        print("🚀 ЗАПУСК ПОЛНОГО ПАЙПЛАЙНА ОБУЧЕНИЯ")
+        """Run full training pipeline"""
+        print("🚀 STARTING FULL TRAINING PIPELINE")
         print("=" * 60)
         
         start_time = datetime.now()
@@ -747,27 +747,27 @@ class NDVIForecaster:
             duration = end_time - start_time
             
             print("\n" + "=" * 60)
-            print("✅ ОБУЧЕНИЕ УСПЕШНО ЗАВЕРШЕНО!")
-            print(f"⏱️  Время выполнения: {duration}")
-            print(f"📁 Веса сохранены в: {WEIGHTS_DIR}/")
+            print("✅ TRAINING SUCCESSFULLY COMPLETED!")
+            print(f"⏱️  Execution time: {duration}")
+            print(f"📁 Models saved in: {WEIGHTS_DIR}/")
             print("=" * 60)
             
         except Exception as e:
-            print(f"\n❌ ОШИБКА: {e}")
+            print(f"\n❌ ERROR: {e}")
             raise
 
-# ===================== ГЛАВНАЯ ФУНКЦИЯ =====================
+# ===================== MAIN FUNCTION =====================
 
 def main():
-    """Главная функция"""
+    """Main function"""
     try:
         forecaster = NDVIForecaster()
         forecaster.run_training_pipeline()
         
     except KeyboardInterrupt:
-        print("\n⏹️  Обучение прервано пользователем")
+        print("\n⏹️  Training interrupted by user")
     except Exception as e:
-        print(f"\n💥 Критическая ошибка: {e}")
+        print(f"\n💥 Critical error: {e}")
         raise
 
 if __name__ == "__main__":

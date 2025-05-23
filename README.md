@@ -1,69 +1,69 @@
 # 🌱 NDVI Time Series Analysis
 
-## 📋 Описание
+## 📋 Description
 
-Модульная система для анализа временных рядов NDVI (Normalized Difference Vegetation Index) с использованием глубокого обучения. Проект предназначен для прогнозирования состояния растительности на основе спутниковых данных Sentinel-2 и метеорологической информации.
+Modular system for NDVI (Normalized Difference Vegetation Index) time series analysis using deep learning. The project is designed for vegetation condition forecasting based on Sentinel-2 satellite data and meteorological information.
 
-## ✨ Особенности
+## ✨ Features
 
-- 🛰️ **Интеграция с Google Earth Engine** для получения данных Sentinel-2
-- 🌤️ **Автоматическое получение погодных данных** через Open-Meteo API
-- 🧠 **LSTM с Multi-Head Attention** для точного прогнозирования
-- 📊 **Интерактивная визуализация** результатов с помощью Plotly
-- 🔧 **Модульная архитектура** с возможностью расширения
-- 🐛 **Подробная система отладки** с эмодзи-логированием
-- ⚡ **Автоматическая обработка данных** (фильтрация облаков, интерполяция)
+- 🛰️ **Google Earth Engine integration** for Sentinel-2 data
+- 🌤️ **Automatic weather data acquisition** through Open-Meteo API
+- 🧠 **LSTM with Multi-Head Attention** for accurate forecasting
+- 📊 **Interactive results visualization** using Plotly
+- 🔧 **Modular architecture** with extensibility
+- 🐛 **Detailed debugging system** with emoji logging
+- ⚡ **Automatic data processing** (cloud filtering, interpolation)
 
-## 🏗️ Архитектура
+## 🏗️ Architecture
 
-### Основные компоненты:
+### Main components:
 
-- **`DebugLogger`** - Система отладки с информативными сообщениями
-- **`ConfigManager`** - Управление конфигурацией проекта
-- **`DataManager`** - Получение и обработка данных NDVI и погоды
-- **`LSTMModel`** - Нейронная сеть с LSTM и механизмом внимания
-- **`ModelTrainer`** - Обучение и сохранение моделей
-- **`NDVIForecaster`** - Главный оркестратор системы
+- **`DebugLogger`** - Debugging system with informative messages
+- **`ConfigManager`** - Project configuration management
+- **`DataManager`** - NDVI and weather data acquisition and processing
+- **`LSTMModel`** - Neural network with LSTM and attention mechanism
+- **`ModelTrainer`** - Model training and saving
+- **`NDVIForecaster`** - Main system orchestrator
 
-## 🚀 Быстрый старт
+## 🚀 Quick Start
 
-### 1. Установка зависимостей
+### 1. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Настройка Google Earth Engine
+### 2. Google Earth Engine setup
 
-Скопируйте файл с примером и заполните своими данными:
+Copy example file and fill with your data:
 
 ```bash
 cp key.json.example key.json
 ```
 
-Отредактируйте `key.json` файл, добавив ваши данные Google Earth Engine Service Account:
+Edit `key.json` file by adding your Google Earth Engine Service Account data:
 
 ```json
 {
   "type": "service_account",
-  "project_id": "ваш-project-id",
-  "private_key_id": "ваш-private-key-id",
-  "private_key": "-----BEGIN PRIVATE KEY-----\nВАШ_ПРИВАТНЫЙ_КЛЮЧ\n-----END PRIVATE KEY-----\n",
-  "client_email": "ваш-service-account@ваш-project.iam.gserviceaccount.com",
-  "client_id": "ваш-client-id",
+  "project_id": "your-project-id",
+  "private_key_id": "your-private-key-id",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nYOUR_PRIVATE_KEY\n-----END PRIVATE KEY-----\n",
+  "client_email": "your-service-account@your-project.iam.gserviceaccount.com",
+  "client_id": "your-client-id",
   "auth_uri": "https://accounts.google.com/o/oauth2/auth",
   "token_uri": "https://oauth2.googleapis.com/token",
   "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/ваш-service-account%40ваш-project.iam.gserviceaccount.com",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/your-service-account%40your-project.iam.gserviceaccount.com",
   "universe_domain": "googleapis.com"
 }
 ```
 
-> ⚠️ **Важно:** Файл `key.json` содержит секретные данные и не должен попадать в систему контроля версий!
+> ⚠️ **Important:** The `key.json` file contains secret data and should not be committed to version control!
 
-### 3. Настройка конфигурации
+### 3. Configuration setup
 
-Создайте или отредактируйте файл `configs/config_ndvi.json`:
+Create or edit `configs/config_ndvi.json` file:
 
 ```json
 {
@@ -83,104 +83,104 @@ cp key.json.example key.json
 }
 ```
 
-### 4. Запуск обучения
+### 4. Run training
 
 ```bash
 python ndvi_ts_lstm.py
 ```
 
-### 5. Тестирование моделей
+### 5. Test models
 
 ```bash
 python test_models.py
 ```
 
-## 📁 Структура проекта
+## 📁 Project structure
 
 ```
 NDVI-time-series-analysis/
-├── 📄 README.md                    # Данный файл
-├── 📄 requirements.txt             # Python зависимости
-├── 📄 key.json.example             # Пример ключа Google Earth Engine
-├── 📄 .gitignore                   # Игнорируемые файлы
-├── 🐍 ndvi_ts_lstm.py             # Основной модуль системы
-├── 🐍 test_models.py              # Тестирование моделей
-├── 📁 configs/                     # Конфигурационные файлы
-│   └── 📄 config_ndvi.json        # Параметры анализа
-├── 📁 weights/                     # Сохранённые веса моделей
+├── 📄 README.md                    # This file
+├── 📄 requirements.txt             # Python dependencies
+├── 📄 key.json.example             # Google Earth Engine key example
+├── 📄 .gitignore                   # Ignored files
+├── 🐍 ndvi_ts_lstm.py             # Main system module
+├── 🐍 test_models.py              # Model testing
+├── 📁 configs/                     # Configuration files
+│   └── 📄 config_ndvi.json        # Analysis parameters
+├── 📁 weights/                     # Saved model weights
 │   ├── 📄 model_weights_original.pth
 │   └── 📄 model_weights_filtered.pth
-└── 📁 results/                     # Результаты анализа
+└── 📁 results/                     # Analysis results
     ├── 📄 forecast_metrics.json
     └── 🖼️ ndvi_forecast_comparison.png
 ```
 
-## ⚙️ Конфигурация
+## ⚙️ Configuration
 
-### Основные параметры:
+### Main parameters:
 
-- **`coordinates`** - Полигон области анализа (WGS84)
-- **`start_date/end_date`** - Временной период анализа
-- **`n_steps_in`** - Количество временных шагов для обучения
-- **`n_steps_out`** - Количество шагов прогноза
-- **`percentile_filter`** - Фильтр выбросов (в процентилях)
-- **`spline_smoothing`** - Параметр сглаживания данных
+- **`coordinates`** - Analysis area polygon (WGS84)
+- **`start_date/end_date`** - Analysis time period
+- **`n_steps_in`** - Number of time steps for training
+- **`n_steps_out`** - Number of forecast steps
+- **`percentile_filter`** - Outlier filter (in percentiles)
+- **`spline_smoothing`** - Data smoothing parameter
 
-### Параметры модели (ModelConfig):
+### Model parameters (ModelConfig):
 
-- **`LSTM_UNITS`** - Количество LSTM нейронов (244)
-- **`NUM_LAYERS`** - Количество слоёв (1)
-- **`DROPOUT_RATE`** - Коэффициент dropout (0.29)
-- **`LEARNING_RATE`** - Скорость обучения (0.0018)
-- **`BATCH_SIZE`** - Размер батча (128)
-- **`EPOCHS`** - Количество эпох (200)
+- **`LSTM_UNITS`** - Number of LSTM neurons (244)
+- **`NUM_LAYERS`** - Number of layers (1)
+- **`DROPOUT_RATE`** - Dropout coefficient (0.29)
+- **`LEARNING_RATE`** - Learning rate (0.0018)
+- **`BATCH_SIZE`** - Batch size (128)
+- **`EPOCHS`** - Number of epochs (200)
 
-## 📊 Результаты
+## 📊 Results
 
-Система генерирует:
+The system generates:
 
-1. **Графики-изображения** - PNG файлы с визуализацией результатов
-2. **Метрики точности** - JSON файлы с показателями качества
-3. **Сохранённые модели** - PyTorch веса для повторного использования
-4. **Отладочная информация** - Подробные логи процесса
+1. **Graph images** - PNG files with results visualization
+2. **Accuracy metrics** - JSON files with quality indicators
+3. **Saved models** - PyTorch weights for reuse
+4. **Debug information** - Detailed process logs
 
-### Метрики качества:
+### Quality metrics:
 
-- **MAE** (Mean Absolute Error) - Средняя абсолютная ошибка
-- **MSE** (Mean Squared Error) - Среднеквадратичная ошибка
-- **RMSE** (Root MSE) - Корень из среднеквадратичной ошибки
-- **R²** - Коэффициент детерминации
+- **MAE** (Mean Absolute Error) - Mean absolute error
+- **MSE** (Mean Squared Error) - Mean squared error
+- **RMSE** (Root MSE) - Root mean squared error
+- **R²** - Coefficient of determination
 
-## 🔒 Безопасность
+## 🔒 Security
 
-- 🔐 Секретные ключи хранятся в файле `key.json`
-- 📝 Файл `key.json` добавлен в `.gitignore`
-- 🗃️ Оригинальные ключи сохраняются в `key.json.backup`
-- 🚫 Никогда не коммитьте файлы с реальными ключами!
+- 🔐 Secret keys are stored in `key.json` file
+- 📝 `key.json` file is added to `.gitignore`
+- 🗃️ Original keys are saved in `key.json.backup`
+- 🚫 Never commit files with real keys!
 
-## 🛠️ Разработка
+## 🛠️ Development
 
-### Структура кода:
+### Code structure:
 
 ```python
-# Система отладки
+# Debugging system
 DebugLogger.log_ndvi_stats(ndvi_values, "API")
 
-# Управление конфигурацией
+# Configuration management
 config = ConfigManager.load_config()
 
-# Получение данных
+# Data acquisition
 data_manager = DataManager(coordinates)
 ndvi_df = data_manager.get_ndvi_data(start_date, end_date)
 
-# Обучение модели
+# Model training
 trainer = ModelTrainer(ModelConfig())
 model = trainer.train_model(model, X, y, "Original")
 ```
 
-### Добавление новых функций:
+### Adding new features:
 
-1. Наследуйтесь от базовых классов
-2. Используйте `DebugLogger` для отладки
-3. Следуйте типизации TypeHints
-4. Документируйте функции на русском языке
+1. Inherit from base classes
+2. Use `DebugLogger` for debugging
+3. Follow TypeHints typing
+4. Document functions in English

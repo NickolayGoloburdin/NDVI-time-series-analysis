@@ -1,78 +1,78 @@
-# Инструкция по использованию NDVI-модели
+# NDVI Model Usage Instructions
 
-## 1. Подготовка данных
+## 1. Data Preparation
 
-### Конфигурационный файл
-Все параметры для обучения и тестирования задаются в файле `configs/config_ndvi.json`. Пример структуры:
+### Configuration File
+All parameters for training and testing are set in the `configs/config_ndvi.json` file. Example structure:
 
 ```
 {
     "coordinates": [
-        [широта1, долгота1],
-        [широта2, долгота2],
-        ... (замкнутый полигон)
+        [latitude1, longitude1],
+        [latitude2, longitude2],
+        ... (closed polygon)
     ],
-    "start_date": "YYYY-MM-DD",  # начальная дата анализа
-    "end_date": "YYYY-MM-DD",    # конечная дата анализа
-    "n_steps_in": 21,             # длина входной последовательности для LSTM
-    "n_steps_out": 7,             # длина прогноза
-    "percentile": 40,             # перцентиль для фильтрации выбросов NDVI
-    "bimonthly_period": "1M",    # период для фильтрации (например, "1M" или "2M")
-    "spline_smoothing": 0.7       # степень сглаживания NDVI
+    "start_date": "YYYY-MM-DD",  # analysis start date
+    "end_date": "YYYY-MM-DD",    # analysis end date
+    "n_steps_in": 21,             # LSTM input sequence length
+    "n_steps_out": 7,             # forecast length
+    "percentile": 40,             # percentile for NDVI outlier filtering
+    "bimonthly_period": "1M",    # filtering period (e.g., "1M" or "2M")
+    "spline_smoothing": 0.7       # NDVI smoothing degree
 }
 ```
 
-- **coordinates** — список точек полигона (широта, долгота), минимум 3, первая и последняя совпадают.
-- **start_date**, **end_date** — диапазон анализа (формат YYYY-MM-DD).
-- Остальные параметры — гиперпараметры модели и фильтрации.
+- **coordinates** — list of polygon points (latitude, longitude), minimum 3, first and last match.
+- **start_date**, **end_date** — analysis range (YYYY-MM-DD format).
+- Other parameters — model and filtering hyperparameters.
 
-### Данные
-- NDVI и погодные данные скачиваются автоматически через Google Earth Engine и open-meteo.com по координатам и датам из конфига.
-- Никаких дополнительных файлов с данными готовить не нужно.
+### Data
+- NDVI and weather data are downloaded automatically via Google Earth Engine and open-meteo.com using coordinates and dates from config.
+- No additional data files need to be prepared.
 
-## 2. Обучение модели
+## 2. Model Training
 
-1. Убедитесь, что все зависимости установлены (см. `requirements.txt`).
-2. Запустите основной файл для обучения:
+1. Make sure all dependencies are installed (see `requirements.txt`).
+2. Run the main file for training:
    ```
    python ndvi_ts_lstm.py
    ```
-3. После завершения обучения веса моделей сохранятся в папку `weights/`:
+3. After training completion, model weights will be saved to `weights/` folder:
    - `weights/model_weights_original.pth`
    - `weights/model_weights_filtered.pth`
 
-## 3. Тестирование и предсказания
+## 3. Testing and Predictions
 
-1. Запустите файл для тестирования и инференса:
+1. Run the file for testing and inference:
    ```
    python test_models.py
    ```
-2. Скрипт автоматически:
-   - загрузит веса моделей
-   - скачает NDVI и погодные данные по конфига
-   - выполнит предсказания на тестовом и будущем периоде
-   - выведет метрики качества (MAE, RMSE, R2) и примеры предсказаний
+2. The script automatically:
+   - loads model weights
+   - downloads NDVI and weather data from config
+   - performs predictions on test and future periods
+   - outputs quality metrics (MAE, RMSE, R2) and prediction examples
 
-## 4. Использование модели для новых данных
+## 4. Using Model for New Data
 
-- Измените координаты и/или даты в `configs/config_ndvi.json`.
-- Повторите шаги обучения и тестирования.
-- Если хотите только предсказания для новых данных — просто запустите `test_models.py` (при наличии весов).
+- Change coordinates and/or dates in `configs/config_ndvi.json`.
+- Repeat training and testing steps.
+- If you only want predictions for new data — just run `test_models.py` (if weights exist).
 
-## 5. Важные замечания
+## 5. Important Notes
 
-- Для работы с NDVI требуется доступ к Google Earth Engine (GEE) и наличие service account ключа (`key.json`).
-- Для работы с погодой используется open-meteo.com (интернет обязателен).
-- Все результаты и графики сохраняются в папку `images/` (если используется визуализация).
-- Для корректной работы рекомендуется использовать Python 3.9–3.12 и все зависимости из `requirements.txt`.
+- Working with NDVI requires Google Earth Engine (GEE) access and service account key (`key.json`).
+- Weather data uses open-meteo.com (internet required).
+- All results and graphs are saved to `images/` folder (if visualization is used).
+- For proper operation, Python 3.9–3.12 and all dependencies from `requirements.txt` are recommended.
 
-## 6. Пример запуска (Linux)
+## 6. Example Run (Linux)
 
 ```bash
-python ndvi_ts_lstm.py   # обучение и сохранение весов
-python test_models.py    # тестирование и предсказания
+python ndvi_ts_lstm.py   # training and saving weights
+python test_models.py    # testing and predictions
 ```
 
 ---
 
-Если возникли вопросы по формату данных, настройке или запуску — обращайтесь к разработчику или смотрите комментарии в исходных файлах. 
+If you have questions about data format, setup, or running — contact the developer or see comments in source files. 

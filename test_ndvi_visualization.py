@@ -8,19 +8,19 @@ from datetime import datetime, timedelta
 import seaborn as sns
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-# Импортируем класс NDVIForecaster из основного файла
+# Import NDVIForecaster class from main file
 from ndvi_ts_lstm import NDVIForecaster, LSTMModel
 
-# Настройки для визуализации
+# Visualization settings
 plt.style.use('seaborn-v0_8-whitegrid')
 sns.set_palette("Set2")
 plt.rcParams.update({'font.size': 12})
 colors = sns.color_palette("Set2", 10)
 
 def load_config(config_path="configs/config_ndvi.json"):
-    """Загрузка конфигурации из JSON-файла"""
+    """Load configuration from JSON file"""
     if not os.path.exists(config_path):
-        # Если конфиг не найден, создаем тестовый конфиг
+        # If config not found, create test config
         test_config = {
             "coordinates": [
                 [51.52945, 38.95530],
@@ -41,20 +41,20 @@ def load_config(config_path="configs/config_ndvi.json"):
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         with open(config_path, "w") as f:
             json.dump(test_config, f, indent=4)
-        print(f"Создан тестовый конфигурационный файл: {config_path}")
+        print(f"Created test configuration file: {config_path}")
         return test_config
     
     with open(config_path, "r") as f:
         config = json.load(f)
-    print(f"Конфигурация загружена из: {config_path}")
+    print(f"Configuration loaded from: {config_path}")
     return config
 
 def test_ndvi_forecaster():
-    """Основная функция для тестирования модели прогнозирования NDVI"""
-    # Загрузка конфигурации
+    """Main function for testing NDVI forecasting model"""
+    # Load configuration
     config = load_config()
     
-    # Создание экземпляра класса NDVIForecaster
+    # Create NDVIForecaster instance
     forecaster = NDVIForecaster(
         coordinates=config["coordinates"],
         start_date=config["start_date"],
@@ -66,260 +66,260 @@ def test_ndvi_forecaster():
         spline_smoothing=config["spline_smoothing"]
     )
     
-    print("1. Инициализация Google Earth Engine...")
+    print("1. Initializing Google Earth Engine...")
     forecaster.initialize_ee()
     
-    # ЭТАП 1: Получение и визуализация данных NDVI
-    print("2. Получение данных NDVI...")
+    # STEP 1: Get and visualize NDVI data
+    print("2. Getting NDVI data...")
     ndvi_timeseries = forecaster.get_ndvi_timeseries(config["start_date"], config["end_date"])
     ndvi_df = forecaster.extract_ndvi_data(ndvi_timeseries)
     
-    # Визуализация NDVI
+    # Visualize NDVI
     plt.figure(figsize=(14, 7))
-    plt.plot(ndvi_df['Date'], ndvi_df['NDVI'], 'o-', color=colors[0], label='NDVI (после интерполяции и фильтрации)')
-    plt.title('Временной ряд NDVI', fontsize=16)
-    plt.xlabel('Дата', fontsize=14)
-    plt.ylabel('Значение NDVI', fontsize=14)
+    plt.plot(ndvi_df['Date'], ndvi_df['NDVI'], 'o-', color=colors[0], label='NDVI (after interpolation and filtering)')
+    plt.title('NDVI Time Series', fontsize=16)
+    plt.xlabel('Date', fontsize=14)
+    plt.ylabel('NDVI Value', fontsize=14)
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.legend()
     plt.tight_layout()
     os.makedirs('images', exist_ok=True)
     plt.savefig('images/ndvi_timeseries.png')
-    print("График NDVI сохранен в images/ndvi_timeseries.png")
+    print("NDVI graph saved to images/ndvi_timeseries.png")
     plt.close()
     
-    # ЭТАП 2: Получение и визуализация данных о погоде
-    print("3. Получение погодных данных...")
+    # STEP 2: Get and visualize weather data
+    print("3. Getting weather data...")
     weather_df = forecaster.get_weather_data(config["start_date"], config["end_date"])
     
-    # Визуализация погодных данных
+    # Visualize weather data
     fig, axs = plt.subplots(3, 1, figsize=(14, 12), sharex=True)
     
-    # График температуры
-    axs[0].plot(weather_df['Date'], weather_df['TempMax'], '-', color=colors[1], label='Максимальная температура')
-    axs[0].plot(weather_df['Date'], weather_df['TempMin'], '-', color=colors[2], label='Минимальная температура')
-    axs[0].set_ylabel('Температура (°C)', fontsize=14)
+    # Temperature plot
+    axs[0].plot(weather_df['Date'], weather_df['TempMax'], '-', color=colors[1], label='Maximum temperature')
+    axs[0].plot(weather_df['Date'], weather_df['TempMin'], '-', color=colors[2], label='Minimum temperature')
+    axs[0].set_ylabel('Temperature (°C)', fontsize=14)
     axs[0].legend()
     axs[0].grid(True, linestyle='--', alpha=0.7)
     
-    # График относительной влажности
-    axs[1].plot(weather_df['Date'], weather_df['RelativeHumidity'], '-', color=colors[3], label='Относительная влажность')
-    axs[1].set_ylabel('Влажность (%)', fontsize=14)
+    # Relative humidity plot
+    axs[1].plot(weather_df['Date'], weather_df['RelativeHumidity'], '-', color=colors[3], label='Relative humidity')
+    axs[1].set_ylabel('Humidity (%)', fontsize=14)
     axs[1].legend()
     axs[1].grid(True, linestyle='--', alpha=0.7)
     
-    # График осадков
-    axs[2].bar(weather_df['Date'], weather_df['Precipitation'], color=colors[4], label='Осадки', alpha=0.7, width=3)
-    axs[2].set_ylabel('Осадки (мм)', fontsize=14)
-    axs[2].set_xlabel('Дата', fontsize=14)
+    # Precipitation plot
+    axs[2].bar(weather_df['Date'], weather_df['Precipitation'], color=colors[4], label='Precipitation', alpha=0.7, width=3)
+    axs[2].set_ylabel('Precipitation (mm)', fontsize=14)
+    axs[2].set_xlabel('Date', fontsize=14)
     axs[2].legend()
     axs[2].grid(True, linestyle='--', alpha=0.7)
     
-    plt.suptitle('Погодные параметры', fontsize=16)
+    plt.suptitle('Weather Parameters', fontsize=16)
     plt.tight_layout()
     plt.savefig('images/weather_data.png')
-    print("График погодных данных сохранен в images/weather_data.png")
+    print("Weather data graph saved to images/weather_data.png")
     plt.close()
     
-    # ЭТАП 3: Объединение и подготовка данных
-    print("4. Объединение и подготовка данных...")
+    # STEP 3: Merge and prepare data
+    print("4. Merging and preparing data...")
     forecaster.merge_data()
     forecaster.prepare_data()
     
-    # Визуализация объединенных данных
+    # Visualize merged data
     fig, axs = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
     
-    # NDVI и сглаженный NDVI
+    # NDVI and smoothed NDVI
     axs[0].plot(forecaster.train_df['Date'], forecaster.train_df['NDVI'], 'o-', color=colors[0], 
-                label='NDVI (фильтр+интерполяция)', alpha=0.7, markersize=4)
+                label='NDVI (filter+interpolation)', alpha=0.7, markersize=4)
     axs[0].plot(forecaster.train_df['Date'], forecaster.train_df['NDVI_Smoothed'], '-', color=colors[5], 
-                label='NDVI (сглаженный)', linewidth=2)
+                label='NDVI (smoothed)', linewidth=2)
     axs[0].set_ylabel('NDVI', fontsize=14)
     axs[0].legend()
     axs[0].grid(True, linestyle='--', alpha=0.7)
     
-    # Температура и осадки
+    # Temperature and precipitation
     ax1 = axs[1]
-    ax1.plot(forecaster.train_df['Date'], forecaster.train_df['TempMax'], '-', color=colors[1], label='Макс. температура')
-    ax1.plot(forecaster.train_df['Date'], forecaster.train_df['TempMin'], '-', color=colors[2], label='Мин. температура')
-    ax1.set_ylabel('Температура (°C)', fontsize=14)
-    ax1.set_xlabel('Дата', fontsize=14)
+    ax1.plot(forecaster.train_df['Date'], forecaster.train_df['TempMax'], '-', color=colors[1], label='Max. temperature')
+    ax1.plot(forecaster.train_df['Date'], forecaster.train_df['TempMin'], '-', color=colors[2], label='Min. temperature')
+    ax1.set_ylabel('Temperature (°C)', fontsize=14)
+    ax1.set_xlabel('Date', fontsize=14)
     ax1.legend(loc='upper left')
     ax1.grid(True, linestyle='--', alpha=0.7)
     
-    # Накладываем график осадков
+    # Overlay precipitation plot
     ax2 = ax1.twinx()
     ax2.bar(forecaster.train_df['Date'], forecaster.train_df['Precipitation'], 
-            color=colors[4], label='Осадки', alpha=0.4, width=3)
-    ax2.set_ylabel('Осадки (мм)', fontsize=14)
+            color=colors[4], label='Precipitation', alpha=0.4, width=3)
+    ax2.set_ylabel('Precipitation (mm)', fontsize=14)
     ax2.legend(loc='upper right')
     
-    plt.suptitle('Объединенные данные NDVI и погоды', fontsize=16)
+    plt.suptitle('Merged NDVI and Weather Data', fontsize=16)
     plt.tight_layout()
     plt.savefig('images/merged_data.png')
-    print("График объединенных данных сохранен в images/merged_data.png")
+    print("Merged data graph saved to images/merged_data.png")
     plt.close()
     
-    # ЭТАП 4: Обучение модели или загрузка весов
-    # Проверяем наличие весов моделей
+    # STEP 4: Train model or load weights
+    # Check if model weights exist
     weights_path_original = "weights/model_weights_original.pth"
     weights_path_filtered = "weights/model_weights_filtered.pth"
     
     if os.path.exists(weights_path_original) and os.path.exists(weights_path_filtered):
-        print("5. Загружаем предобученные веса моделей...")
-        # Подготавливаем данные
+        print("5. Loading pretrained model weights...")
+        # Prepare data
         train_data, smoothed_data = forecaster.scale_data()
         X_train, y_train = forecaster.split_sequences(train_data, config["n_steps_in"], config["n_steps_out"])
         n_features = X_train.shape[2]
         
-        # Создаем модели
+        # Create models
         forecaster.model_original = forecaster.create_model(n_features)
         forecaster.model_filtered = forecaster.create_model(n_features)
         
-        # Загружаем веса
+        # Load weights
         forecaster.load_model_weights(forecaster.model_original, "original")
         forecaster.load_model_weights(forecaster.model_filtered, "filtered")
     else:
-        print("5. Предобученные модели не найдены")
-        raise Exception("Предобученные модели не найдены")
+        print("5. Pretrained models not found")
+        raise Exception("Pretrained models not found")
     
-    # ЭТАП 5: Прогнозирование и оценка
-    print("6. Прогнозирование NDVI...")
+    # STEP 5: Forecasting and evaluation
+    print("6. Forecasting NDVI...")
     test_pred_original, test_pred_smoothed, forecast_pred_original, forecast_pred_smoothed = forecaster.forecast()
     
-    # Создаем сводный график с прогнозом
-    # Определяем даты для прогноза
+    # Create summary plot with forecast
+    # Define dates for forecast
     if forecaster.case in [1, 2] and forecaster.test_df is not None:
-        # Для случаев с тестовыми данными
+        # For cases with test data
         test_dates = forecaster.test_df['Date'][:len(test_pred_smoothed)].values
     
-    # Даты для будущего прогноза
+    # Dates for future forecast
     forecast_dates = pd.date_range(start=forecaster.forecast_dates[0], periods=len(forecast_pred_smoothed), freq='5D')
     
     plt.figure(figsize=(14, 7))
     
-    # Тренировочные данные
+    # Training data
     plt.plot(forecaster.train_df['Date'], forecaster.train_df['NDVI'], 'o-', color=colors[0], 
-             label='NDVI (фильтр+интерполяция)', alpha=0.7, markersize=4)
+             label='NDVI (filter+interpolation)', alpha=0.7, markersize=4)
     plt.plot(forecaster.train_df['Date'], forecaster.train_df['NDVI_Smoothed'], '-', color=colors[5], 
-             label='NDVI (сглаженный)', linewidth=2)
+             label='NDVI (smoothed)', linewidth=2)
     
-    # Тестовые данные и прогнозы
+    # Test data and forecasts
     if forecaster.case in [1, 2] and forecaster.test_df is not None and not forecaster.test_df.empty:
         plt.plot(forecaster.test_df['Date'], forecaster.test_df['NDVI'], 'o-', color='lightblue', 
-                 label='Фактический NDVI (тест)', alpha=0.7, markersize=4)
+                 label='Actual NDVI (test)', alpha=0.7, markersize=4)
         plt.plot(forecaster.test_df['Date'], forecaster.test_df['NDVI_Smoothed'], '-', color='blue', 
-                 label='Фактический NDVI (сглаженный, тест)', linewidth=2)
+                 label='Actual NDVI (smoothed, test)', linewidth=2)
         
         if test_pred_smoothed is not None and len(test_pred_smoothed) > 0:
             plt.plot(test_dates, test_pred_smoothed, '--', color='red', 
-                     label='LSTM прогноз (сглаженный)', linewidth=2)
+                     label='LSTM forecast (smoothed)', linewidth=2)
     
-    # Отображение будущего прогноза
+    # Display future forecast
     if forecaster.case in [2, 3]:
         if forecast_pred_smoothed is not None and len(forecast_pred_smoothed) > 0:
             plt.plot(forecast_dates, forecast_pred_smoothed, '--', color='red', 
-                     label='LSTM прогноз (сглаженный)', linewidth=2)
+                     label='LSTM forecast (smoothed)', linewidth=2)
         
-        # Отображение исторического базового прогноза
+        # Display historical baseline forecast
         plt.plot(forecaster.baseline_df['Date'], forecaster.baseline_df['Historical_Avg_NDVI_Smoothed'], 
-                 '--', color='purple', label='Исторический базовый прогноз', linewidth=2)
+                 '--', color='purple', label='Historical baseline forecast', linewidth=2)
     
-    # Добавление вертикальной линии, отделяющей историю от прогноза
+    # Add vertical line separating history from forecast
     current_date = forecaster.current_date
-    plt.axvline(x=current_date, color='black', linestyle='--', label='Текущая дата')
+    plt.axvline(x=current_date, color='black', linestyle='--', label='Current date')
     
-    plt.title(f'Прогноз NDVI - Сценарий {forecaster.case}', fontsize=16)
-    plt.xlabel('Дата', fontsize=14)
+    plt.title(f'NDVI Forecast - Scenario {forecaster.case}', fontsize=16)
+    plt.xlabel('Date', fontsize=14)
     plt.ylabel('NDVI', fontsize=14)
     plt.legend(loc='best')
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.tight_layout()
     plt.savefig(f'images/ndvi_forecast_case_{forecaster.case}.png')
-    print(f"Прогноз NDVI сохранен в images/ndvi_forecast_case_{forecaster.case}.png")
+    print(f"NDVI forecast saved to images/ndvi_forecast_case_{forecaster.case}.png")
     plt.close()
     
-    # ЭТАП 6: Оценка точности модели (если есть тестовые данные)
+    # STEP 6: Model accuracy evaluation (if test data exists)
     if forecaster.case in [1, 2] and forecaster.test_df is not None and not forecaster.test_df.empty:
-        print("7. Оценка точности модели...")
+        print("7. Model accuracy evaluation...")
         
-        # Ограничиваем тестовые данные размером прогноза
+        # Limit test data to forecast size
         test_actual = forecaster.test_df['NDVI_Smoothed'].values[:len(test_pred_smoothed)]
         
         if len(test_actual) > 0 and len(test_pred_smoothed) > 0:
-            # Вычисляем метрики
+            # Calculate metrics
             mae = mean_absolute_error(test_actual, test_pred_smoothed)
             rmse = np.sqrt(mean_squared_error(test_actual, test_pred_smoothed))
             r2 = r2_score(test_actual, test_pred_smoothed)
             
-            # Создаем график сравнения прогноза с фактическими данными
+            # Create forecast comparison graph with actual data
             plt.figure(figsize=(14, 7))
             plt.plot(test_dates[:len(test_actual)], test_actual, 'o-', color='blue', 
-                    label='Фактический NDVI', alpha=0.7)
+                    label='Actual NDVI', alpha=0.7)
             plt.plot(test_dates[:len(test_pred_smoothed)], test_pred_smoothed, 'o--', color='red', 
-                    label='Прогноз NDVI', alpha=0.7)
+                    label='NDVI Forecast', alpha=0.7)
             
-            # Добавляем метрики в заголовок
-            plt.title(f'Сравнение прогноза с фактическими данными\nMAE: {mae:.4f}, RMSE: {rmse:.4f}, R²: {r2:.4f}', 
+            # Add metrics to title
+            plt.title(f'Forecast Comparison with Actual Data\nMAE: {mae:.4f}, RMSE: {rmse:.4f}, R²: {r2:.4f}', 
                     fontsize=16)
-            plt.xlabel('Дата', fontsize=14)
+            plt.xlabel('Date', fontsize=14)
             plt.ylabel('NDVI', fontsize=14)
             plt.legend(loc='best')
             plt.grid(True, linestyle='--', alpha=0.7)
             plt.tight_layout()
             plt.savefig('images/forecast_accuracy.png')
-            print("График точности прогноза сохранен в images/forecast_accuracy.png")
+            print("Forecast accuracy graph saved to images/forecast_accuracy.png")
             plt.close()
             
-            # Создаем график разброса (scatter plot)
+            # Create scatter plot
             plt.figure(figsize=(10, 10))
             plt.scatter(test_actual, test_pred_smoothed, color='blue', alpha=0.7)
             plt.plot([min(test_actual), max(test_actual)], [min(test_actual), max(test_actual)], 
                     'r--', linewidth=2)
-            plt.title('Scatter Plot: Фактический vs Прогнозируемый NDVI', fontsize=16)
-            plt.xlabel('Фактический NDVI', fontsize=14)
-            plt.ylabel('Прогнозируемый NDVI', fontsize=14)
+            plt.title('Scatter Plot: Actual vs Forecasted NDVI', fontsize=16)
+            plt.xlabel('Actual NDVI', fontsize=14)
+            plt.ylabel('Forecasted NDVI', fontsize=14)
             plt.grid(True, linestyle='--', alpha=0.7)
             plt.axis('equal')
             plt.tight_layout()
             plt.savefig('images/scatter_plot.png')
-            print("График разброса сохранен в images/scatter_plot.png")
+            print("Scatter plot saved to images/scatter_plot.png")
             plt.close()
         else:
-            print("Недостаточно данных для оценки точности модели")
+            print("Insufficient data for model accuracy evaluation")
     
-    # ЭТАП 7: Визуализация входных последовательностей и механизма внимания
-    print("8. Визуализация входных параметров модели...")
+    # STEP 7: Visualize input sequences and attention mechanism
+    print("8. Visualizing model input parameters...")
     
-    # Создаем график входных последовательностей
+    # Create input sequence graph
     plt.figure(figsize=(14, 10))
     
-    # Создаем пример входной последовательности для визуализации
+    # Create example input sequence for visualization
     input_sequence = forecaster.train_df.tail(config["n_steps_in"])[['TempMin', 'TempMax', 'RelativeHumidity', 'Precipitation']]
     
-    # Масштабируем последовательность
+    # Scale sequence
     input_scaled = forecaster.scaler_x.transform(input_sequence)
     
-    # Визуализация входных функций
+    # Visualize input functions
     x_range = np.arange(len(input_sequence))
     
     plt.subplot(4, 1, 1)
-    plt.plot(x_range, input_sequence['TempMin'], 'o-', color=colors[2], label='Мин. температура')
-    plt.plot(x_range, input_sequence['TempMax'], 'o-', color=colors[1], label='Макс. температура')
-    plt.title('Входная последовательность для LSTM модели', fontsize=16)
-    plt.ylabel('Температура (°C)', fontsize=12)
+    plt.plot(x_range, input_sequence['TempMin'], 'o-', color=colors[2], label='Min. temperature')
+    plt.plot(x_range, input_sequence['TempMax'], 'o-', color=colors[1], label='Max. temperature')
+    plt.title('Input Sequence for LSTM Model', fontsize=16)
+    plt.ylabel('Temperature (°C)', fontsize=12)
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
     
     plt.subplot(4, 1, 2)
-    plt.plot(x_range, input_sequence['RelativeHumidity'], 'o-', color=colors[3], label='Относительная влажность')
-    plt.ylabel('Влажность (%)', fontsize=12)
+    plt.plot(x_range, input_sequence['RelativeHumidity'], 'o-', color=colors[3], label='Relative humidity')
+    plt.ylabel('Humidity (%)', fontsize=12)
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
     
     plt.subplot(4, 1, 3)
-    plt.bar(x_range, input_sequence['Precipitation'], color=colors[4], label='Осадки', alpha=0.7, width=0.8)
-    plt.ylabel('Осадки (мм)', fontsize=12)
+    plt.bar(x_range, input_sequence['Precipitation'], color=colors[4], label='Precipitation', alpha=0.7, width=0.8)
+    plt.ylabel('Precipitation (mm)', fontsize=12)
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
     
@@ -327,81 +327,81 @@ def test_ndvi_forecaster():
     plt.plot(x_range, input_sequence.index.map(lambda x: forecaster.train_df.loc[x, 'NDVI']), 
              'o-', color=colors[0], label='NDVI')
     plt.plot(x_range, input_sequence.index.map(lambda x: forecaster.train_df.loc[x, 'NDVI_Smoothed']), 
-             'o-', color=colors[5], label='NDVI (сглаженный)')
+             'o-', color=colors[5], label='NDVI (smoothed)')
     plt.ylabel('NDVI', fontsize=12)
-    plt.xlabel('Шаг последовательности', fontsize=14)
+    plt.xlabel('Sequence Step', fontsize=14)
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
     
     plt.tight_layout()
     plt.savefig('images/input_sequence.png')
-    print("График входной последовательности сохранен в images/input_sequence.png")
+    print("Input sequence graph saved to images/input_sequence.png")
     plt.close()
     
-    print("Тестирование модели NDVI-прогнозирования завершено!")
-    print("Все графики сохранены в директории 'images/'")
+    print("NDVI forecasting test completed!")
+    print("All graphs saved to directory 'images/'")
 
 def explain_model():
-    """Создает информационный график со схемой модели"""
-    # Создаем схематичное изображение LSTM модели с механизмом внимания
+    """Creates information graph with model scheme"""
+    # Create schematic LSTM model with attention mechanism image
     fig, ax = plt.subplots(figsize=(14, 10))
     
-    # Скрываем оси
+    # Hide axes
     ax.axis('off')
     
-    # Заголовок
-    ax.text(0.5, 0.95, 'Архитектура LSTM модели с механизмом внимания', 
+    # Title
+    ax.text(0.5, 0.95, 'LSTM Model Architecture with Attention Mechanism', 
             fontsize=18, weight='bold', ha='center', va='top')
     
-    # Добавляем описание модели
+    # Add model description
     description = """
-    Принцип работы модели NDVI-прогнозирования:
+    NDVI forecasting model working principle:
     
-    1. Входные данные:
-       • Погодные параметры: мин./макс. температура, влажность, осадки
-       • Исторические значения NDVI с интервалом 5 дней
+    1. Input data:
+       • Weather parameters: min./max. temperature, humidity, precipitation
+       • Historical NDVI values with 5-day interval
     
-    2. Предобработка данных:
-       • Фильтрация выбросов с использованием процентилей по 2-месячным периодам
-       • Линейная интерполяция для заполнения пропущенных значений
-       • Сглаживание с использованием сплайнов для уменьшения шума
-       • Масштабирование всех значений в диапазон [0,1]
+    2. Data preprocessing:
+       • Outliers filtering using percentiles for 2-month periods
+       • Linear interpolation for filling missing values
+       • Smoothing using splines to reduce noise
+       • Scaling all values to range [0,1]
     
-    3. Архитектура LSTM:
-       • Входной слой: погодные параметры + значения NDVI
-       • LSTM слои с дропаутом для предотвращения переобучения
-       • Механизм многоголового внимания для определения значимости входных данных
-       • Полносвязный слой для выходных значений NDVI
+    3. LSTM architecture:
+       • Input layer: weather parameters + NDVI values
+       • LSTM layers with dropout for preventing overfitting
+       • Multi-head attention mechanism for determining input data significance
+       • Fully connected layer for NDVI output values
     
-    4. Обучение:
-       • Формирование временных последовательностей методом "скользящего окна"
-       • Оптимизация с помощью Adam с клиппингом градиентов
-       • Функция потерь: Mean Squared Error (MSE)
+    4. Training:
+       • Time series formation method "sliding window"
+       • Optimization using Adam with gradient clipping
+       • Loss function: Mean Squared Error (MSE)
     
-    5. Прогнозирование:
-       • Входная последовательность: n_steps_in шагов (обычно 72 точки = 360 дней)
-       • Выходная последовательность: n_steps_out шагов (обычно 18 точек = 90 дней)
-       • Прогноз генерируется с шагом 5 дней
+    5. Forecasting:
+       • Input sequence: n_steps_in steps (usually 72 points = 360 days)
+       • Output sequence: n_steps_out steps (usually 18 points = 90 days)
+       • Forecast generated with 5-day step
     
-    6. Проверка и валидация:
-       • Сравнение с фактическими значениями NDVI
-       • Оценка точности: MAE, RMSE, R²
-       • Сравнение с историческим средним (baseline)
+    6. Check and validation:
+       • Comparison with actual NDVI values
+       • Accuracy evaluation: MAE, RMSE, R²
+       • Comparison with historical average (baseline)
     """
     
     ax.text(0.5, 0.5, description, fontsize=14, ha='center', va='center')
     
     plt.tight_layout()
     plt.savefig('images/model_explanation.png', dpi=300, bbox_inches='tight')
-    print("Схема модели сохранена в images/model_explanation.png")
+    print("Model scheme saved to images/model_explanation.png")
     plt.close()
 
 if __name__ == "__main__":
-    # Создаем директорию для изображений, если ее нет
+    # Create images directory if it doesn't exist
     os.makedirs('images', exist_ok=True)
     
-    # Создаем объяснение модели
+    # Create model explanation
     explain_model()
     
-    # Запускаем тестирование
+    # Run test
     test_ndvi_forecaster() 
