@@ -9,3 +9,5 @@ requests
 openmeteo-requests
 requests-cache
 retry-requests
+matplotlib
+kaleido

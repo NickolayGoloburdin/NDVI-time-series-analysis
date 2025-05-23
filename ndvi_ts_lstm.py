@@ -1,737 +1,774 @@
-# Импорт необходимых библиотек
-import ee  # Google Earth Engine API
-import requests  # Для работы с HTTP-запросами (получение погодных данных)
-# import random  # (закомментировано, не используется)
-import numpy as np  # Работа с массивами и матрицами
-import pandas as pd  # Работа с таблицами и временными рядами
-from sklearn.preprocessing import MinMaxScaler  # Масштабирование данных
-import torch  # PyTorch для построения нейросетей
-import torch.nn as nn  # Модули нейросетей
-import torch.optim as optim  # Оптимизаторы
-from torch.utils.data import TensorDataset, DataLoader  # Для работы с датасетами и загрузкой данных
-from numpy import array, hstack  # Работа с массивами
-from scipy.interpolate import UnivariateSpline  # Сглаживание временных рядов
-import warnings  # Для подавления предупреждений
-import plotly.graph_objects as go  # Визуализация результатов
+"""
+NDVI Time Series Analysis and Forecasting System
+==============================================
+
+Модульная система для анализа временных рядов NDVI с использованием LSTM и multi-head attention.
+
+Основные компоненты:
+- DataManager: управление данными NDVI и погоды
+- ModelTrainer: обучение нейронных сетей
+- NDVIPredictor: генерация прогнозов
+- ConfigManager: управление конфигурацией
+- DebugLogger: система отладки
+"""
+
+import os
+import json
+import warnings
+from typing import Dict, List, Tuple, Optional, Any
+from dataclasses import dataclass
+from datetime import datetime
+
+import ee
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import TensorDataset, DataLoader
+from sklearn.preprocessing import MinMaxScaler
+from scipy.interpolate import UnivariateSpline
+import plotly.graph_objects as go
 import openmeteo_requests
 import requests_cache
 from retry_requests import retry
 
-warnings.filterwarnings("ignore")  # Отключение предупреждений
+warnings.filterwarnings("ignore")
 
-# Класс LSTM-модели с multi-head attention
-class LSTMModel(nn.Module):
-    def __init__(self, input_size, hidden_size, num_layers, output_size, dropout_rate=0.288):
-        super(LSTMModel, self).__init__()
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        # LSTM слой
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=dropout_rate)
-        # self.dropout = nn.Dropout(dropout_rate)  # (закомментировано)
+# ===================== КОНСТАНТЫ =====================
+@dataclass
+class ModelConfig:
+    """Конфигурация модели"""
+    LSTM_UNITS: int = 244
+    NUM_LAYERS: int = 1
+    DROPOUT_RATE: float = 0.2887856831106061
+    LEARNING_RATE: float = 0.001827795604676652
+    BATCH_SIZE: int = 128
+    EPOCHS: int = 200
+    WEIGHT_DECAY: float = 1e-5
+    ATTENTION_HEADS: int = 4
 
-        # Конфигурация multi-head attention
-        self.num_heads = 4
-        self.attention = nn.MultiheadAttention(self.hidden_size, num_heads=self.num_heads)
-        self.layer_norm = nn.LayerNorm(hidden_size)  # Нормализация слоя
-        self.fc = nn.Linear(hidden_size, output_size)  # Полносвязный слой для вывода
+@dataclass
+class DataConfig:
+    """Конфигурация данных"""
+    RESAMPLE_FREQUENCY: str = '5D'
+    CLOUD_PERCENTAGE_THRESHOLD: int = 70
+    SCALE_FACTOR: int = 10000
+    TEMP_MIN_RANGE: Tuple[float, float] = (-60, 60)
+    TEMP_MAX_RANGE: Tuple[float, float] = (-60, 60)
+    HUMIDITY_RANGE: Tuple[float, float] = (0, 100)
+    PRECIPITATION_MIN: float = 0
 
-    def forward(self, x):
-        # Инициализация скрытых состояний LSTM
-        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
-        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size).to(x.device)
-        out, _ = self.lstm(x, (h0, c0))  # Прямой проход через LSTM
+WEIGHTS_DIR = "weights"
+CONFIG_FILE = "configs/config_ndvi.json"
+CACHE_FILE = ".cache"
+RESULTS_DIR = "results"  # Изменено с images на results
+SERVICE_ACCOUNT_FILE = "key.json"
 
-        # Подготовка к attention (seq_len, batch, hidden)
-        attention_in = out.permute(1, 0, 2)
+# ===================== ВСПОМОГАТЕЛЬНЫЕ КЛАССЫ =====================
 
-        # Применение multi-head attention
-        attn_output, _ = self.attention(
-            query=attention_in,
-            key=attention_in,
-            value=attention_in
-        )
-
-        # Резидуальное соединение и нормализация
-        attn_output = attn_output.permute(1, 0, 2) # Обратно к (batch, seq, hidden)
-        output = self.layer_norm(out + attn_output)
-
-        # Выходной слой (берём только последний временной шаг)
-        out = self.fc(output[:, -1, :])
-        return out
-
-# Класс для прогнозирования NDVI
-class NDVIForecaster:
-    def __init__(self, coordinates, start_date, end_date,
-                 n_steps_in, n_steps_out,
-                 percentile, bimonthly_period, spline_smoothing
-                #  lstm_units = None
-                #  seed=42
-                 ):
-        # self.set_seeds(seed) # Для воспроизводимости (закомментировано)
-        # Предопределённые гиперпараметры модели
-        self.model_config = {
-            'lstm_units': 244,
-            'num_layers': 1, 
-            'dropout_rate': 0.2887856831106061, 
-            'learning_rate': 0.001827795604676652, 
-            'batch_size': 128}
-        self.coordinates = coordinates  # Координаты полигона
-        self.end_date = end_date  # Конечная дата анализа
-        self.start_date = start_date  # Начальная дата анализа
-        self.n_steps_in = n_steps_in  # Количество входных временных шагов
-        self.n_steps_out = n_steps_out  # Количество прогнозируемых шагов
-        # self.lstm_units = lstm_units
-        self.percentile = percentile  # Перцентиль для фильтрации NDVI
-        self.bimonthly_period = bimonthly_period  # Интервал для фильтрации (например, 2 месяца)
-        self.spline_smoothing = spline_smoothing  # Параметр сглаживания сплайна
-        self.ndvi_df = None  # DataFrame с NDVI
-        self.ndvi_interpolated = None  # Интерполированные значения NDVI
-        self.baseline_df = None  # Базовая линия (исторический средний NDVI)
-        self.weather_df = None  # DataFrame с погодными данными
-        self.merged_df = None  # Объединённые данные NDVI и погоды
-        self.train_df = None  # Обучающая выборка
-        self.test_df = None  # Тестовая выборка
-        self.model_original = None  # Модель для исходных данных
-        self.model_filtered = None  # Модель для сглаженных данных
-        self.scaler_x = MinMaxScaler()  # Масштабатор для признаков
-        self.scaler_y = MinMaxScaler()  # Масштабатор для NDVI
-        self.scaler_y_smoothed = MinMaxScaler()  # Масштабатор для сглаженного NDVI
-        self.current_date = pd.Timestamp.today().normalize()  # Текущая дата
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # Выбор устройства (GPU/CPU)
-        # print(f"Using device: {self.device}")
-        # if self.device.type == 'cuda':
-        #     print(f"GPU name: {torch.cuda.get_device_name(0)}")
-        #     print(f"GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
-        self.model_original = None
-        self.model_filtered = None
-
-    # @staticmethod
-    # def set_seeds(seed):
-    #     """Фиксация seed для воспроизводимости"""
-    #     torch.manual_seed(seed)
-    #     torch.cuda.manual_seed(seed)
-    #     np.random.seed(seed)
-    #     random.seed(seed)
-    #     torch.backends.cudnn.deterministic = True
-    #     torch.backends.cudnn.benchmark = False
-
-    def initialize_ee(self):
-        """Аутентификация и инициализация Google Earth Engine"""
-        service_account = 'nickolay@optical-realm-387012.iam.gserviceaccount.com'
-        credentials = ee.ServiceAccountCredentials(service_account, 'key.json')
-        ee.Initialize(credentials)
+class DebugLogger:
+    """Система отладки и логирования"""
     
-    def mask_clouds(self, image):
-        """Маскирование облаков по соответствующим каналам спутниковых данных"""
-        qa = image.select('QA60')
-        scl = image.select('SCL')
-        cloud_mask = qa.bitwiseAnd(1 << 10).eq(0).And(qa.bitwiseAnd(1 << 11).eq(0)) \
-                    .And(scl.neq(3)).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10)).And(scl.neq(11))
-        return image.updateMask(cloud_mask).divide(10000).select("B.*").copyProperties(image, ["system:time_start"])
+    @staticmethod
+    def log_data_shape(name: str, data: Any) -> None:
+        """Логирует форму данных"""
+        if hasattr(data, 'shape'):
+            print(f"📊 {name}: shape = {data.shape}")
+        elif isinstance(data, (list, tuple)):
+            print(f"📊 {name}: length = {len(data)}")
+        elif isinstance(data, pd.DataFrame):
+            print(f"📊 {name}: DataFrame shape = {data.shape}, columns = {list(data.columns)}")
+        else:
+            print(f"📊 {name}: type = {type(data)}")
+    
+    @staticmethod
+    def log_ndvi_stats(ndvi_values: List[float], source: str = "API") -> None:
+        """Логирует статистику NDVI"""
+        if not ndvi_values:
+            print(f"⚠️  {source}: Нет данных NDVI")
+            return
+            
+        min_val, max_val = min(ndvi_values), max(ndvi_values)
+        mean_val = np.mean(ndvi_values)
+        
+        print(f"🌿 {source} NDVI статистика:")
+        print(f"   📈 Диапазон: {min_val:.3f} - {max_val:.3f}")
+        print(f"   📊 Среднее: {mean_val:.3f}")
+        print(f"   📋 Количество: {len(ndvi_values)}")
+        
+        # Оценка качества
+        if max_val < 0:
+            print("   ⚠️  Все значения отрицательные - проблемная область!")
+        elif max_val > 0.8:
+            print("   ✅ Высокие значения - здоровая растительность")
+        elif max_val > 0.3:
+            print("   ✅ Умеренные значения - нормальная растительность")
+        else:
+            print("   ⚠️  Низкие значения - слабая растительность")
+    
+    @staticmethod
+    def log_training_progress(epoch: int, total_epochs: int, loss: float, model_name: str) -> None:
+        """Логирует прогресс обучения"""
+        if (epoch + 1) % 20 == 0 or epoch + 1 == total_epochs:
+            progress = (epoch + 1) / total_epochs * 100
+            print(f"🚀 {model_name}: Epoch [{epoch+1}/{total_epochs}] ({progress:.1f}%) - Loss: {loss:.6f}")
 
-    def calculate_ndvi(self, image):
-        """Вычисление NDVI"""
-        ndvi = image.normalizedDifference(['B8', 'B4']).rename('NDVI')
-        return image.addBands(ndvi)
+class ConfigManager:
+    """Управление конфигурацией"""
+    
+    @staticmethod
+    def load_config(config_path: str = CONFIG_FILE) -> Dict[str, Any]:
+        """Загружает конфигурацию из JSON файла"""
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+            
+            print(f"✅ Конфигурация загружена из {config_path}")
+            print(f"📍 Координаты: {len(config['coordinates'])} точек")
+            print(f"📅 Период: {config['start_date']} - {config['end_date']}")
+            print(f"🔧 Параметры: n_steps_in={config['n_steps_in']}, n_steps_out={config['n_steps_out']}")
+            
+            return config
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Файл конфигурации {config_path} не найден")
+        except json.JSONDecodeError:
+            raise ValueError(f"Некорректный JSON в файле {config_path}")
+    
+    @staticmethod
+    def validate_config(config: Dict[str, Any]) -> None:
+        """Валидирует конфигурацию"""
+        required_keys = ['coordinates', 'start_date', 'end_date', 'n_steps_in', 'n_steps_out']
+        missing_keys = [key for key in required_keys if key not in config]
+        
+        if missing_keys:
+            raise ValueError(f"Отсутствуют обязательные параметры: {missing_keys}")
+        
+        if config['n_steps_in'] <= 0 or config['n_steps_out'] <= 0:
+            raise ValueError("n_steps_in и n_steps_out должны быть положительными")
+        
+        print("✅ Конфигурация валидна")
 
-    def get_ndvi_timeseries(self, start_date, end_date):
-        """Получение временного ряда NDVI через Google Earth Engine"""
-        aoi = ee.Geometry.Polygon([self.coordinates])  # Область интереса
-        ee_start_date = start_date
-        ee_end_date = end_date
-        collection = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED') \
-            .filterDate(ee_start_date, ee_end_date) \
-            .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 30)) \
-            .map(self.mask_clouds) \
-            .map(self.calculate_ndvi)
+# ===================== МОДЕЛЬ LSTM =====================
 
+class LSTMModel(nn.Module):
+    """LSTM модель с multi-head attention"""
+    
+    def __init__(self, input_size: int, config: ModelConfig):
+        super(LSTMModel, self).__init__()
+        self.hidden_size = config.LSTM_UNITS
+        self.num_layers = config.NUM_LAYERS
+        
+        # LSTM слой
+        self.lstm = nn.LSTM(
+            input_size, 
+            self.hidden_size, 
+            self.num_layers, 
+            batch_first=True, 
+            dropout=config.DROPOUT_RATE if self.num_layers > 1 else 0
+        )
+        
+        # Multi-head attention
+        self.attention = nn.MultiheadAttention(
+            self.hidden_size, 
+            num_heads=config.ATTENTION_HEADS
+        )
+        
+        # Нормализация и выходной слой
+        self.layer_norm = nn.LayerNorm(self.hidden_size)
+        self.dropout = nn.Dropout(config.DROPOUT_RATE)
+        self.fc = nn.Linear(self.hidden_size, 1)  # Выход только 1 значение
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        batch_size, seq_len = x.size(0), x.size(1)
+        
+        # Инициализация скрытых состояний
+        h0 = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=x.device)
+        c0 = torch.zeros(self.num_layers, batch_size, self.hidden_size, device=x.device)
+        
+        # LSTM
+        lstm_out, _ = self.lstm(x, (h0, c0))
+        
+        # Attention (seq_len, batch, hidden)
+        attn_input = lstm_out.permute(1, 0, 2)
+        attn_output, _ = self.attention(
+            query=attn_input,
+            key=attn_input,
+            value=attn_input
+        )
+        
+        # Residual connection + layer norm
+        attn_output = attn_output.permute(1, 0, 2)  # (batch, seq, hidden)
+        output = self.layer_norm(lstm_out + attn_output)
+        output = self.dropout(output)
+        
+        # Выходной слой (только последний временной шаг)
+        return self.fc(output[:, -1, :])
+
+# ===================== УПРАВЛЕНИЕ ДАННЫМИ =====================
+
+class DataManager:
+    """Управление данными NDVI и погоды"""
+    
+    def __init__(self, coordinates: List[Tuple[float, float]], service_account_file: str = SERVICE_ACCOUNT_FILE):
+        self.coordinates = coordinates
+        self.service_account_file = service_account_file
+        self._initialize_ee()
+        self._setup_weather_client()
+        
+        # Scalers
+        self.scaler_x = MinMaxScaler()
+        self.scaler_y = MinMaxScaler()
+        self.scaler_y_smoothed = MinMaxScaler()
+        
+    def _initialize_ee(self) -> None:
+        """Инициализация Google Earth Engine"""
+        try:
+            # Проверяем существование файла ключа
+            if not os.path.exists(self.service_account_file):
+                raise FileNotFoundError(
+                    f"Файл ключа {self.service_account_file} не найден. "
+                    f"Скопируйте key.json.example в key.json и заполните своими данными."
+                )
+            
+            # Загружаем credentials из JSON файла
+            with open(self.service_account_file, 'r') as f:
+                service_account_info = json.load(f)
+            
+            credentials = ee.ServiceAccountCredentials(
+                service_account_info["client_email"], 
+                self.service_account_file
+            )
+            ee.Initialize(credentials)
+            print("✅ Google Earth Engine инициализирован с ключом из файла")
+            
+        except FileNotFoundError as e:
+            print(f"❌ {e}")
+            print("💡 Создайте файл key.json на основе key.json.example")
+            raise
+        except Exception as e:
+            print(f"❌ Ошибка инициализации GEE: {e}")
+            print("💡 Проверьте правильность данных в key.json")
+            raise
+    
+    def _setup_weather_client(self) -> None:
+        """Настройка клиента погодных данных"""
+        cache_session = requests_cache.CachedSession(CACHE_FILE, expire_after=3600)
+        retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
+        self.weather_client = openmeteo_requests.Client(session=retry_session)
+        print("✅ Клиент погодных данных настроен")
+    
+    def get_ndvi_data(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """Получает данные NDVI через Google Earth Engine"""
+        print(f"🛰️  Получение NDVI данных: {start_date} - {end_date}")
+        
+        aoi = ee.Geometry.Polygon([self.coordinates])
+        collection = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+                     .filterDate(start_date, end_date)
+                     .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', DataConfig.CLOUD_PERCENTAGE_THRESHOLD))
+                     .map(self._mask_clouds)
+                     .map(self._calculate_ndvi))
+        
         def compute_ndvi(image):
-            mean_ndvi = image.reduceRegion(
+            values = image.reduceRegion(
                 reducer=ee.Reducer.mean(),
                 geometry=aoi,
                 scale=10
-            ).get('NDVI')
-            date = ee.Date(image.get('system:time_start')).format('YYYY-MM-dd')
-            return ee.Feature(None, {'date': date, 'NDVI': mean_ndvi})
-
-        ndvi_collection = collection.filterBounds(aoi).select('NDVI').map(compute_ndvi) 
-        ndvi_info = ndvi_collection.getInfo()
-        # print("NDVI timeseries: ", ndvi_info)
-        return ndvi_info
-
-    def extract_ndvi_data(self, ndvi_timeseries, filtering=True):
-        """Извлечение данных NDVI из временного ряда"""
-        dates = []
-        ndvi_values = []
-        # print("Extracting NDVI data...", ndvi_timeseries)
-        for feature in ndvi_timeseries['features']:
-            properties = feature['properties']
-            date = properties.get('date')
-            ndvi = properties.get('NDVI')
-            if date and ndvi is not None:
-                dates.append(date)
-                ndvi_values.append(ndvi)
+            )
             
-        self.ndvi_df = pd.DataFrame({'Date': pd.to_datetime(dates), 'NDVI': ndvi_values})
-        self.ndvi_df = self.apply_interpolate(self.ndvi_df)  # Интерполяция
-        if filtering:
-            self.ndvi_df = self.apply_filtering(self.ndvi_df)  # Фильтрация выбросов
-            self.ndvi_df = self.apply_interpolate(self.ndvi_df)  # Повторная интерполяция
-
-        # print("Filtered & Interpolated NDVI data: ", self.ndvi_df.shape)
-        return self.ndvi_df 
-
-    def get_weather_data(self, start_date, end_date):
-        """Получение погодных данных через open-meteo.com API"""
-        # Вычисление центра полигона
-        def calculate_centroid(coords):
-            lats = [coord[0] for coord in coords]
-            lons = [coord[1] for coord in coords]
-            centroid_lat = sum(lats)/len(lats)
-            centroid_lon = sum(lons)/len(lons)
-            return (centroid_lat, centroid_lon)
-
-        centroid = calculate_centroid(self.coordinates)
-        latitude, longitude = centroid
-
-        if isinstance(start_date, str):
-            start_date = pd.Timestamp(start_date)
-        if isinstance(end_date, str):
-            end_date = pd.Timestamp(end_date)
-        weather_start_date = start_date.strftime('%Y-%m-%d')
-        weather_end_date = end_date.strftime('%Y-%m-%d')
-
-        # Настройка клиента Open-Meteo
-        cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
-        retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
-        openmeteo = openmeteo_requests.Client(session=retry_session)
-
-        url = "https://historical-forecast-api.open-meteo.com/v1/forecast"
+            return ee.Feature(None, {
+                'date': ee.Date(image.get('system:time_start')).format('YYYY-MM-dd'),
+                'NDVI': values.get('NDVI')
+            })
+        
+        ndvi_collection = collection.filterBounds(aoi).select('NDVI').map(compute_ndvi)
+        ndvi_info = ndvi_collection.getInfo()
+        
+        # Извлечение данных
+        dates, ndvi_values = [], []
+        for feature in ndvi_info['features']:
+            props = feature['properties']
+            if props.get('date') and props.get('NDVI') is not None:
+                dates.append(props['date'])
+                ndvi_values.append(props['NDVI'])
+        
+        # Отладка
+        DebugLogger.log_ndvi_stats(ndvi_values, "GEE API")
+        
+        df = pd.DataFrame({
+            'Date': pd.to_datetime(dates),
+            'NDVI': ndvi_values
+        })
+        
+        print(f"✅ Получено {len(df)} записей NDVI")
+        return df.sort_values('Date').reset_index(drop=True)
+    
+    def _mask_clouds(self, image):
+        """Маскировка облаков"""
+        qa = image.select('QA60')
+        scl = image.select('SCL')
+        cloud_mask = (qa.bitwiseAnd(1 << 10).eq(0)
+                     .And(qa.bitwiseAnd(1 << 11).eq(0))
+                     .And(scl.neq(3)).And(scl.neq(8)).And(scl.neq(9))
+                     .And(scl.neq(10)).And(scl.neq(11)))
+        
+        return (image.updateMask(cloud_mask)
+                    .divide(DataConfig.SCALE_FACTOR)
+                    .select("B.*")
+                    .copyProperties(image, ["system:time_start"]))
+    
+    def _calculate_ndvi(self, image):
+        """Вычисление NDVI"""
+        ndvi = image.normalizedDifference(['B8', 'B4']).rename('NDVI')
+        return image.addBands(ndvi)
+    
+    def get_weather_data(self, start_date: str, end_date: str) -> pd.DataFrame:
+        """Получает погодные данные"""
+        print(f"🌤️  Получение погодных данных: {start_date} - {end_date}")
+        
+        # Центр полигона
+        lats = [coord[0] for coord in self.coordinates]
+        lons = [coord[1] for coord in self.coordinates]
+        centroid_lat, centroid_lon = np.mean(lats), np.mean(lons)
+        
+        print(f"📍 Центр области: {centroid_lat:.3f}, {centroid_lon:.3f}")
+        
         params = {
-            "latitude": latitude,
-            "longitude": longitude,
-            "start_date": weather_start_date,
-            "end_date": weather_end_date,
+            "latitude": centroid_lat,
+            "longitude": centroid_lon,
+            "start_date": start_date,
+            "end_date": end_date,
             "daily": ["temperature_2m_min", "temperature_2m_max"],
             "hourly": ["temperature_2m", "relative_humidity_2m", "precipitation"]
         }
-        responses = openmeteo.weather_api(url, params=params)
+        
+        url = "https://historical-forecast-api.open-meteo.com/v1/forecast"
+        responses = self.weather_client.weather_api(url, params=params)
         response = responses[0]
-
-        # Обработка почасовых данных
-        hourly = response.Hourly()
-        hourly_temperature_2m = hourly.Variables(0).ValuesAsNumpy()
-        hourly_relative_humidity_2m = hourly.Variables(1).ValuesAsNumpy()
-        hourly_precipitation = hourly.Variables(2).ValuesAsNumpy()
-        hourly_dates = pd.date_range(
-            start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
-            end=pd.to_datetime(hourly.TimeEnd(), unit="s", utc=True),
-            freq=pd.Timedelta(seconds=hourly.Interval()),
-            inclusive="left"
-        )
-        hourly_df = pd.DataFrame({
-            "DateTime": hourly_dates,
-            "temperature_2m": hourly_temperature_2m,
-            "relative_humidity_2m": hourly_relative_humidity_2m,
-            "precipitation": hourly_precipitation
-        })
-        # Группируем по дню, усредняем температуру и влажность, суммируем осадки
-        daily_hourly = hourly_df.groupby(hourly_df["DateTime"].dt.date).agg({
-            "temperature_2m": "mean",
-            "relative_humidity_2m": "mean",
-            "precipitation": "sum"
-        }).reset_index().rename(columns={"DateTime": "Date"})
-        daily_hourly["Date"] = pd.to_datetime(daily_hourly["Date"]).dt.tz_localize(None)
-
-        # Обработка дневных данных
+        
+        # Обработка данных
+        weather_df = self._process_weather_response(response)
+        weather_df = self._validate_weather_data(weather_df)
+        
+        print(f"✅ Получено {len(weather_df)} записей погоды")
+        DebugLogger.log_data_shape("Weather data", weather_df)
+        
+        return weather_df
+    
+    def _process_weather_response(self, response) -> pd.DataFrame:
+        """Обрабатывает ответ погодного API"""
+        # Дневные данные
         daily = response.Daily()
-        daily_temperature_2m_min = daily.Variables(0).ValuesAsNumpy()
-        daily_temperature_2m_max = daily.Variables(1).ValuesAsNumpy()
         daily_dates = pd.date_range(
             start=pd.to_datetime(daily.Time(), unit="s", utc=True),
             end=pd.to_datetime(daily.TimeEnd(), unit="s", utc=True),
             freq=pd.Timedelta(seconds=daily.Interval()),
             inclusive="left"
         )
+        
         daily_df = pd.DataFrame({
             "Date": daily_dates,
-            "TempMin": daily_temperature_2m_min,
-            "TempMax": daily_temperature_2m_max
+            "TempMin": daily.Variables(0).ValuesAsNumpy(),
+            "TempMax": daily.Variables(1).ValuesAsNumpy()
         })
-        daily_df["Date"] = pd.to_datetime(daily_df["Date"]).dt.tz_localize(None)
-
-        # Объединяем дневные и усреднённые почасовые данные
+        daily_df["Date"] = daily_df["Date"].dt.tz_localize(None)
+        
+        # Почасовые данные
+        hourly = response.Hourly()
+        hourly_dates = pd.date_range(
+            start=pd.to_datetime(hourly.Time(), unit="s", utc=True),
+            end=pd.to_datetime(hourly.TimeEnd(), unit="s", utc=True),
+            freq=pd.Timedelta(seconds=hourly.Interval()),
+            inclusive="left"
+        )
+        
+        hourly_df = pd.DataFrame({
+            "DateTime": hourly_dates,
+            "temperature_2m": hourly.Variables(0).ValuesAsNumpy(),
+            "relative_humidity_2m": hourly.Variables(1).ValuesAsNumpy(),
+            "precipitation": hourly.Variables(2).ValuesAsNumpy()
+        })
+        
+        # Агрегация по дням
+        daily_hourly = hourly_df.groupby(hourly_df["DateTime"].dt.date).agg({
+            "temperature_2m": "mean",
+            "relative_humidity_2m": "mean",
+            "precipitation": "sum"
+        }).reset_index()
+        daily_hourly["Date"] = pd.to_datetime(daily_hourly["DateTime"]).dt.tz_localize(None)
+        
+        # Объединение
         weather_df = pd.merge(daily_df, daily_hourly, on="Date", how="inner")
         weather_df = weather_df.rename(columns={
-            "temperature_2m": "TempMean",
             "relative_humidity_2m": "RelativeHumidity",
             "precipitation": "Precipitation"
         })
-        # Для совместимости с NDVI оставляем только нужные столбцы
-        weather_df = weather_df[["Date", "TempMin", "TempMax", "RelativeHumidity", "Precipitation"]]
-        # Фильтрация некорректных значений
-        weather_df = weather_df[
-            (weather_df['TempMax'] >= -60) & (weather_df['TempMax'] <= 60) &
-            (weather_df['TempMin'] >= -60) & (weather_df['TempMin'] <= 60) &
-            (weather_df['RelativeHumidity'] >= 0) & (weather_df['RelativeHumidity'] <= 100) &
-            (weather_df['Precipitation'] >= 0)
+        
+        return weather_df[["Date", "TempMin", "TempMax", "RelativeHumidity", "Precipitation"]]
+    
+    def _validate_weather_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Валидирует погодные данные"""
+        initial_count = len(df)
+        
+        df = df[
+            (df['TempMax'] >= DataConfig.TEMP_MAX_RANGE[0]) & 
+            (df['TempMax'] <= DataConfig.TEMP_MAX_RANGE[1]) &
+            (df['TempMin'] >= DataConfig.TEMP_MIN_RANGE[0]) & 
+            (df['TempMin'] <= DataConfig.TEMP_MIN_RANGE[1]) &
+            (df['RelativeHumidity'] >= DataConfig.HUMIDITY_RANGE[0]) & 
+            (df['RelativeHumidity'] <= DataConfig.HUMIDITY_RANGE[1]) &
+            (df['Precipitation'] >= DataConfig.PRECIPITATION_MIN)
         ]
-        self.weather_df = weather_df
-        return self.weather_df
-
-    def merge_data(self):
-        """Объединение NDVI и погодных данных по дате"""
-        self.merged_df = pd.merge_asof(self.ndvi_df.sort_values('Date'), self.weather_df.sort_values('Date'), on='Date', direction='nearest')
-        # print(self.merged_df.shape)
-        return self.merged_df
-
-    def apply_filtering(self, df):
-        """Фильтрация данных по перцентилю внутри временных интервалов"""
-        df['BimonthlyPeriod'] = df['Date'].dt.to_period(self.bimonthly_period)
-        percentile_threshold = df.groupby('BimonthlyPeriod')['NDVI'].quantile(self.percentile/100).reset_index()
-        df = df.merge(percentile_threshold, on='BimonthlyPeriod', suffixes=('', '_threshold'))
-        return df[df['NDVI'] >= df['NDVI_threshold']].drop(columns=['BimonthlyPeriod', 'NDVI_threshold'])
-
-    def apply_interpolate(self, df):
-        """Линейная интерполяция данных по датам с шагом 5 дней"""
-        df = df.set_index('Date')
-        df = df.resample('5D').interpolate(method='linear')
-        return df.reset_index() 
+        
+        filtered_count = initial_count - len(df)
+        if filtered_count > 0:
+            print(f"⚠️  Отфильтровано {filtered_count} некорректных записей погоды")
+        
+        return df
     
-    def apply_smoothing(self, df):
-        """Сглаживание данных с помощью UnivariateSpline"""
-        # Минимальное количество точек для сплайна
-        min_points = 4
+    def process_data(self, ndvi_df: pd.DataFrame, weather_df: pd.DataFrame, 
+                    percentile: float, bimonthly_period: str, 
+                    spline_smoothing: float) -> pd.DataFrame:
+        """Обрабатывает и объединяет данные NDVI и погоды"""
+        print("🔄 Обработка и объединение данных...")
         
-        # Работаем с копией и убеждаемся, что Date - это колонка
-        df_copy = df.copy()
-        if isinstance(df_copy.index, pd.DatetimeIndex):
-            df_copy.reset_index(inplace=True)
+        # Интерполяция NDVI
+        ndvi_df = self._interpolate_data(ndvi_df)
+        DebugLogger.log_data_shape("NDVI после интерполяции", ndvi_df)
         
-        if len(df_copy) < min_points:
-            # Если точек мало, дополняем из train_df
-            pad_needed = min_points - len(df_copy)
-            padding_data = self.train_df.tail(pad_needed)
-            padded_dates = pd.concat([padding_data['Date'], df_copy['Date']])
-            padded_ndvi = pd.concat([padding_data['NDVI'], df_copy['NDVI']])
-            spline = UnivariateSpline(
-                padded_dates.map(pd.Timestamp.toordinal),
-                padded_ndvi,
-                s=self.spline_smoothing
-            )
-            return spline(df_copy['Date'].map(pd.Timestamp.toordinal))
-        else:
-            spline = UnivariateSpline(
-                df_copy['Date'].map(pd.Timestamp.toordinal),
-                df_copy['NDVI'],
-                s=self.spline_smoothing
-            )
-            return spline(df_copy['Date'].map(pd.Timestamp.toordinal))
-    
-    def create_historical_baseline(self, forecast_dates):
-        """Создание исторического среднего NDVI для baseline"""
-        baseline_predictions = []
+        # Фильтрация выбросов
+        ndvi_df = self._filter_outliers(ndvi_df, percentile, bimonthly_period)
+        DebugLogger.log_data_shape("NDVI после фильтрации", ndvi_df)
         
-        for forecast_date in forecast_dates:
-            month = forecast_date.month
-            day = forecast_date.day
-            # Берём похожие даты из train_df
-            historical_similar = self.train_df[
-                (self.train_df['Date'].dt.month == month) &
-                (abs(self.train_df['Date'].dt.day - day) <= 2)
-            ]
-            if len(historical_similar) > 0:
-                avg_ndvi = historical_similar['NDVI'].mean()
-            else:
-                month_data = self.train_df[self.train_df['Date'].dt.month == month]
-                if len(month_data) > 0:
-                    avg_ndvi = month_data['NDVI'].mean()
-                else:
-                    avg_ndvi = self.train_df['NDVI'].mean()
-            baseline_predictions.append({
-                'Date': forecast_date,
-                'Historical_Avg_NDVI': avg_ndvi
-            })
-        baseline_df = pd.DataFrame(baseline_predictions)
-        # Интерполяция baseline
-        baseline_df = self.apply_interpolate(baseline_df)
-        baseline_df = baseline_df.rename(columns={'NDVI': 'Historical_Avg_NDVI'})
-        # Сглаживание baseline
-        baseline_df['Historical_Avg_NDVI_Smoothed'] = self.apply_smoothing(
-            baseline_df.rename(columns={'Historical_Avg_NDVI': 'NDVI'})
+        # Повторная интерполяция
+        ndvi_df = self._interpolate_data(ndvi_df)
+        
+        # Объединение с погодными данными
+        merged_df = pd.merge_asof(
+            ndvi_df.sort_values('Date'), 
+            weather_df.sort_values('Date'), 
+            on='Date', 
+            direction='nearest'
         )
-        # print('Baseline_df_FnS:', baseline_df.shape)
-        return baseline_df
+        
+        # Сглаживание NDVI
+        merged_df['NDVI_Smoothed'] = self._smooth_data(merged_df, spline_smoothing)
+        
+        print(f"✅ Объединено {len(merged_df)} записей")
+        DebugLogger.log_data_shape("Финальные данные", merged_df)
+        
+        return merged_df
+    
+    def _interpolate_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Интерполяция данных с фиксированным шагом"""
+        # Проверка на дубликаты дат
+        duplicates_count = df['Date'].duplicated().sum()
+        if duplicates_count > 0:
+            print(f"🔍 Найдено {duplicates_count} дубликатов дат, удаляем...")
+        
+        # Удаляем дубликаты дат, оставляя первое вхождение
+        df_clean = df.drop_duplicates(subset=['Date'], keep='first')
+        
+        df_indexed = df_clean.set_index('Date')
+        df_resampled = df_indexed.resample(DataConfig.RESAMPLE_FREQUENCY).interpolate(method='linear')
+        return df_resampled.reset_index()
+    
+    def _filter_outliers(self, df: pd.DataFrame, percentile: float, period: str) -> pd.DataFrame:
+        """Фильтрация выбросов по перцентилю"""
+        df = df.copy()
+        df['Period'] = df['Date'].dt.to_period(period)
+        
+        thresholds = df.groupby('Period')['NDVI'].quantile(percentile/100).reset_index()
+        df = df.merge(thresholds, on='Period', suffixes=('', '_threshold'))
+        
+        filtered_df = df[df['NDVI'] >= df['NDVI_threshold']]
+        removed_count = len(df) - len(filtered_df)
+        
+        if removed_count > 0:
+            print(f"🔍 Отфильтровано {removed_count} выбросов ({percentile}% перцентиль)")
+        
+        return filtered_df.drop(columns=['Period', 'NDVI_threshold'])
+    
+    def _smooth_data(self, df: pd.DataFrame, smoothing: float) -> np.ndarray:
+        """Сглаживание данных сплайном"""
+        if len(df) < 4:
+            print("⚠️  Недостаточно данных для сглаживания")
+            return df['NDVI'].values
+        
+        x_ordinal = df['Date'].map(pd.Timestamp.toordinal)
+        spline = UnivariateSpline(x_ordinal, df['NDVI'], s=smoothing)
+        return spline(x_ordinal)
+    
+    def prepare_sequences(self, df: pd.DataFrame, n_steps_in: int, n_steps_out: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+        """Подготавливает последовательности для обучения"""
+        print(f"📦 Подготовка последовательностей: {n_steps_in} входных → {n_steps_out} выходных")
+        
+        # Масштабирование
+        features = ['TempMin', 'TempMax', 'RelativeHumidity', 'Precipitation']
+        X_scaled = self.scaler_x.fit_transform(df[features])
+        y_scaled = self.scaler_y.fit_transform(df[['NDVI']])
+        y_smoothed_scaled = self.scaler_y_smoothed.fit_transform(df[['NDVI_Smoothed']])
+        
+        # Создание последовательностей
+        X, y_original, y_smoothed = [], [], []
+        
+        for i in range(len(df) - n_steps_in - n_steps_out + 1):
+            # Входная последовательность (признаки + NDVI)
+            input_seq = np.hstack([
+                X_scaled[i:i+n_steps_in],
+                y_scaled[i:i+n_steps_in]
+            ])
+            X.append(input_seq)
+            
+            # Выходные последовательности
+            y_original.append(y_scaled[i+n_steps_in:i+n_steps_in+n_steps_out].flatten())
+            y_smoothed.append(y_smoothed_scaled[i+n_steps_in:i+n_steps_in+n_steps_out].flatten())
+        
+        X = np.array(X)
+        y_original = np.array(y_original)
+        y_smoothed = np.array(y_smoothed)
+        
+        print(f"✅ Создано последовательностей: {len(X)}")
+        DebugLogger.log_data_shape("X (входы)", X)
+        DebugLogger.log_data_shape("y_original", y_original)
+        DebugLogger.log_data_shape("y_smoothed", y_smoothed)
+        
+        return X, y_original, y_smoothed, X.shape[2]
 
-    def prepare_data(self):
-        """Подготовка данных только для обучения (train_df на всём диапазоне)"""
-        start_date = pd.Timestamp(self.start_date)
-        end_date = pd.Timestamp(self.end_date)
-        self.train_df = self.merged_df[
-            (self.merged_df['Date'] >= start_date) & 
-            (self.merged_df['Date'] <= end_date)
-        ].copy()
-        # Сглаживание обучающей выборки
-        self.train_df['NDVI_Smoothed'] = self.apply_smoothing(self.train_df)
-        # Формируем baseline только по обучающему диапазону
-        self.baseline_df = self.create_historical_baseline(self.train_df['Date'])
-        # Обеспечиваем непрерывность дат (опционально)
-        all_dates = pd.date_range(start=start_date, end=end_date, freq='5D')
-        self.all_data = pd.DataFrame({'Date': all_dates})
-        self.all_data = pd.merge_asof(self.all_data, self.train_df, on='Date', direction='nearest')
+# ===================== ОБУЧЕНИЕ МОДЕЛЕЙ =====================
 
-    def scale_data(self):
-        """Масштабирование данных с помощью MinMaxScaler"""
-        X_scaled = self.scaler_x.fit_transform(self.train_df[['TempMin', 'TempMax', 'RelativeHumidity', 'Precipitation']])
-        y_scaled = self.scaler_y.fit_transform(self.train_df[['NDVI']])
-        y_smoothed_scaled = self.scaler_y_smoothed.fit_transform(self.train_df[['NDVI_Smoothed']])
-        train_data = hstack((X_scaled, y_scaled))
-        smoothed_data = hstack((X_scaled, y_smoothed_scaled))
-        return train_data, smoothed_data
-
-    @staticmethod
-    def split_sequences(sequences, n_steps_in, n_steps_out):
-        """Разделение временных рядов на входные и выходные последовательности"""
-        X, y = list(), list()
-        for i in range(len(sequences)):
-            end_ix = i + n_steps_in
-            out_end_ix = end_ix + n_steps_out
-            if out_end_ix > len(sequences):
-                break
-            seq_x, seq_y = sequences[i:end_ix, :-1], sequences[end_ix:out_end_ix, -1]
-            X.append(seq_x)
-            y.append(seq_y)
-        return array(X), array(y)
-
-    def create_model(self, n_features):
-        # Создание экземпляра LSTM-модели
-        return LSTMModel(
-            input_size=n_features,
-            hidden_size=self.model_config['lstm_units'],
-            num_layers=self.model_config['num_layers'],
-            output_size=self.n_steps_out,
-            dropout_rate=self.model_config['dropout_rate']
-        ).to(self.device)
-
-    def train_models(self):
-        # Обучение двух моделей: по исходным и сглаженным данным
-        train_data, smoothed_data = self.scale_data()
-        X_train, y_train = self.split_sequences(train_data, self.n_steps_in, self.n_steps_out)
-        X_smoothed, y_smoothed = self.split_sequences(smoothed_data, self.n_steps_in, self.n_steps_out)
-        n_features = X_train.shape[2]
-        self.model_original = self.create_model(n_features)
-        self.model_filtered = self.create_model(n_features)
-        self.train_model(self.model_original, X_train, y_train, "Original")
-        self.train_model(self.model_filtered, X_smoothed, y_smoothed, "Filtered")
-
-    def train_model(self, model, X, y, model_name):
-        # Обучение одной модели
-        # g = torch.Generator()
-        # g.manual_seed(42)
+class ModelTrainer:
+    """Обучение LSTM моделей"""
+    
+    def __init__(self, config: ModelConfig):
+        self.config = config
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"🖥️  Устройство для обучения: {self.device}")
+        
+        if self.device.type == 'cuda':
+            print(f"🚀 GPU: {torch.cuda.get_device_name(0)}")
+            print(f"💾 Память GPU: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
+    
+    def create_model(self, input_size: int) -> LSTMModel:
+        """Создает модель LSTM"""
+        model = LSTMModel(input_size, self.config).to(self.device)
+        
+        # Подсчет параметров
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        
+        print(f"🧠 Модель создана:")
+        print(f"   📊 Всего параметров: {total_params:,}")
+        print(f"   🎯 Обучаемых параметров: {trainable_params:,}")
+        
+        return model
+    
+    def train_model(self, model: LSTMModel, X: np.ndarray, y: np.ndarray, model_name: str) -> LSTMModel:
+        """Обучает одну модель"""
+        print(f"\n🚀 Начало обучения модели: {model_name}")
+        print(f"📊 Данные: {X.shape[0]} последовательностей")
+        
+        # Подготовка данных
         X_tensor = torch.FloatTensor(X).to(self.device)
         y_tensor = torch.FloatTensor(y).to(self.device)
+        
         dataset = TensorDataset(X_tensor, y_tensor)
         dataloader = DataLoader(
             dataset, 
-            batch_size=self.model_config['batch_size'], 
-            shuffle=True
-            # generator=g
+            batch_size=self.config.BATCH_SIZE, 
+            shuffle=True,
+            num_workers=0  # Для стабильности
         )
-        criterion = nn.MSELoss()  # Функция потерь
+        
+        # Оптимизатор и функция потерь
+        criterion = nn.MSELoss()
         optimizer = optim.Adam(
             model.parameters(), 
-            lr=self.model_config['learning_rate'],
-            weight_decay=1e-5
+            lr=self.config.LEARNING_RATE,
+            weight_decay=self.config.WEIGHT_DECAY
         )
-        print(f"Training {model_name} model on {self.device}")
-        epochs = 200
-        for epoch in range(epochs):
-            model.train()
-            total_loss = 0
+        
+        # Обучение
+        model.train()
+        loss_history = []
+        
+        for epoch in range(self.config.EPOCHS):
+            epoch_loss = 0.0
+            batch_count = 0
+            
             for batch_X, batch_y in dataloader:
                 optimizer.zero_grad()
+                
+                # Прямой проход
                 outputs = model(batch_X)
-                loss = criterion(outputs, batch_y)
+                
+                # Функция потерь (усредняем по выходным шагам)
+                loss = criterion(outputs.squeeze(), batch_y.mean(dim=1))
+                
+                # Обратное распространение
                 loss.backward()
+                
+                # Градиентный клиппинг
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                
                 optimizer.step()
-                total_loss += loss.item()
-            if (epoch + 1) % 10 == 0:
-                print(f'{model_name} Model - Epoch [{epoch+1}/{epochs}], Loss: {total_loss/len(dataloader):.4f}')
-
-    def predict_future(self, model, input_sequence):
-        # Прогнозирование будущих значений NDVI
+                
+                epoch_loss += loss.item()
+                batch_count += 1
+            
+            avg_loss = epoch_loss / batch_count
+            loss_history.append(avg_loss)
+            
+            # Логирование
+            DebugLogger.log_training_progress(epoch, self.config.EPOCHS, avg_loss, model_name)
+        
+        print(f"✅ Обучение {model_name} завершено. Финальная потеря: {loss_history[-1]:.6f}")
+        
         model.eval()
-        with torch.no_grad():
-            predictions = []
-            for i in range(0, len(input_sequence) - self.n_steps_in, self.n_steps_out):
-                input_seq = torch.FloatTensor(input_sequence[i:i+self.n_steps_in]).unsqueeze(0).to(self.device)
-                prediction = model(input_seq).cpu().numpy()
-                predictions.extend(prediction[0])
-        return predictions
+        return model
     
-    def get_future_weather(self, future_dates):
-        # Генерация погодных данных для будущих дат на основе исторических
-        historical_weather = self.weather_df.copy()
-        future_weather_list = []
-        for future_date in future_dates:
-            month = future_date.month
-            day = future_date.day
-            # Берём похожие даты из истории
-            historical_similar = historical_weather[
-                (historical_weather['Date'].dt.month == month) &
-                (abs(historical_weather['Date'].dt.day - day) <= 2)
-            ]
-            if len(historical_similar) > 0:
-                avg_weather = historical_similar.mean()
-            else:
-                month_data = historical_weather[historical_weather['Date'].dt.month == month]
-                if len(month_data) > 0:
-                    avg_weather = month_data.mean()
-                else:
-                    avg_weather = historical_weather.mean()
-            future_weather_list.append({
-                'Date': future_date,
-                'TempMin': avg_weather['TempMin'],
-                'TempMax': avg_weather['TempMax'],
-                'RelativeHumidity': avg_weather['RelativeHumidity'],
-                'Precipitation': avg_weather['Precipitation']
-            })
-        future_weather = pd.DataFrame(future_weather_list)
-        return future_weather
+    def save_models(self, model_original: LSTMModel, model_smoothed: LSTMModel) -> None:
+        """Сохраняет веса моделей"""
+        os.makedirs(WEIGHTS_DIR, exist_ok=True)
+        
+        original_path = os.path.join(WEIGHTS_DIR, "model_weights_original.pth")
+        smoothed_path = os.path.join(WEIGHTS_DIR, "model_weights_filtered.pth")
+        
+        torch.save(model_original.state_dict(), original_path)
+        torch.save(model_smoothed.state_dict(), smoothed_path)
+        
+        print(f"💾 Модели сохранены:")
+        print(f"   📁 Original: {original_path}")
+        print(f"   📁 Smoothed: {smoothed_path}")
 
-    def forecast(self):
-        """Генерация прогнозов для тестового и будущего периодов"""
-        test_pred_original = None
-        test_pred_smoothed = None
-        forecast_pred_original = None
-        forecast_pred_smoothed = None
-        if self.case in [1, 2]:
-            if self.test_df is not None and not self.test_df.empty:
-                # Масштабирование тестовых данных
-                test_X = self.scaler_x.transform(
-                    self.test_df[['TempMin', 'TempMax', 'RelativeHumidity', 'Precipitation']]
-                )
-                # Последние n_steps_in из train для инициализации прогноза
-                last_train_data = self.train_df.tail(self.n_steps_in)[
-                    ['TempMin', 'TempMax', 'RelativeHumidity', 'Precipitation']
-                ]
-                last_train_X = self.scaler_x.transform(last_train_data)
-                # Объединяем для прогноза
-                test_input_sequence = np.vstack([last_train_X, test_X])
-                # Генерируем прогнозы
-                test_pred_original = self.predict_future(self.model_original, test_input_sequence)
-                test_pred_smoothed = self.predict_future(self.model_filtered, test_input_sequence)
-                # Даты для прогноза
-                last_train_date = self.train_df['Date'].iloc[-1]
-                test_dates = pd.date_range(
-                    start=last_train_date + pd.Timedelta(days=5),
-                    periods=self.n_steps_out,
-                    freq='5D'
-                )
-                # Преобразуем к numpy
-                test_pred_original = np.array(test_pred_original)
-                test_pred_smoothed = np.array(test_pred_smoothed)
-                # Обратное масштабирование
-                test_pred_original = self.scaler_y.inverse_transform(
-                    test_pred_original.reshape(-1, 1)
-                )
-                test_pred_smoothed = self.scaler_y_smoothed.inverse_transform(
-                    test_pred_smoothed.reshape(-1, 1)
-                )
-                # Сглаживание
-                if test_pred_original is not None and len(test_pred_original) > 0:
-                    test_pred_df = pd.DataFrame({
-                        'Date': test_dates,
-                        'NDVI': test_pred_original.flatten()
-                    })
-                    test_pred_original = self.apply_smoothing(test_pred_df)
-                if test_pred_smoothed is not None and len(test_pred_smoothed) > 0:
-                    test_pred_smoothed_df = pd.DataFrame({
-                        'Date': test_dates,
-                        'NDVI': test_pred_smoothed.flatten()
-                    })
-                    test_pred_smoothed = self.apply_smoothing(test_pred_smoothed_df)
-        if self.case in [2, 3]:
-            future_weather = self.get_future_weather(self.forecast_dates)
-            future_X = self.scaler_x.transform(future_weather[['TempMin', 'TempMax', 'RelativeHumidity', 'Precipitation']])
-            last_known_data = self.train_df[['TempMin', 'TempMax', 'RelativeHumidity', 'Precipitation']].tail(self.n_steps_in).values
-            last_known_X = self.scaler_x.transform(last_known_data)
-            forecast_input_sequence = np.vstack([last_known_X, future_X])
-            forecast_pred_original = self.predict_future(self.model_original, forecast_input_sequence)
-            forecast_pred_smoothed = self.predict_future(self.model_filtered, forecast_input_sequence)
-            forecast_pred_original = np.array(forecast_pred_original)
-            forecast_pred_smoothed = np.array(forecast_pred_smoothed)
-            # Обратное масштабирование
-            forecast_pred_original = self.scaler_y.inverse_transform(
-                forecast_pred_original.reshape(-1, 1)
-            )
-            forecast_pred_smoothed = self.scaler_y_smoothed.inverse_transform(
-                forecast_pred_smoothed.reshape(-1, 1)
-            )
-            forecast_dates = pd.date_range(start=self.forecast_dates[0], periods=len(forecast_pred_smoothed), freq='5D')
-            forecast_pred_smoothed = self.apply_smoothing(pd.DataFrame({'Date': forecast_dates, 'NDVI': forecast_pred_smoothed.flatten()}))
-            if len(forecast_pred_original) == 0 or len(forecast_pred_smoothed) == 0:
-                print("Warning: No forecast predictions generated. Check your forecast data and model.")
-        return test_pred_original, test_pred_smoothed, forecast_pred_original, forecast_pred_smoothed
+# ===================== ГЛАВНЫЙ КЛАСС =====================
 
-    def visualize_results(self, test_pred_original, test_pred_smoothed, 
-                      forecast_pred_original, forecast_pred_smoothed):
-        """Визуализация результатов работы модели"""
-        fig = go.Figure()
-        # Обучающие данные
-        fig.add_trace(go.Scatter(x=self.train_df['Date'], y=self.train_df['NDVI'], 
-                                mode='lines+markers', name='NDVI (Filtered+Interpolated)', 
-                                line=dict(color='darkseagreen')))
-        fig.add_trace(go.Scatter(x=self.train_df['Date'], y=self.train_df['NDVI_Smoothed'], 
-                                mode='lines', name='NDVI (Smoothed)', 
-                                line=dict(color='green')))
-        # Тестовые данные и прогнозы
-        if self.case == 1 and self.test_df is not None and not self.test_df.empty:
-            # Тестовый период ровно 3 месяца
-            test_start = self.train_df['Date'].max() + pd.Timedelta(days=1)
-            test_end = test_start + pd.DateOffset(months=3) - pd.Timedelta(days=1)
-            test_mask = (self.test_df['Date'] >= test_start) & (self.test_df['Date'] <= test_end)
-            fig.add_trace(go.Scatter(x=self.test_df.loc[test_mask, 'Date'], y=self.test_df.loc[test_mask, 'NDVI'], 
-                                    mode='lines+markers', name='Actual NDVI (Filtered+Interpolated)', 
-                                    line=dict(color='lightblue')))
-            fig.add_trace(go.Scatter(x=self.test_df.loc[test_mask, 'Date'], y=self.test_df.loc[test_mask, 'NDVI_Smoothed'], 
-                                    mode='lines', name='Actual NDVI (Smoothed)', 
-                                    line=dict(color='blue')))
-            if test_pred_original is not None and len(test_pred_original) > 0:
-                fig.add_trace(go.Scatter(x=self.test_df.loc[test_mask, 'Date'][:len(test_pred_original)], y=test_pred_original.flatten(),
-                                        mode='lines', name='LSTM Forecast (Filtered+Interpolated)', 
-                                        line=dict(color='orange', dash='dot')))
-            if test_pred_smoothed is not None and len(test_pred_smoothed) > 0:
-                fig.add_trace(go.Scatter(x=self.test_df.loc[test_mask, 'Date'][:len(test_pred_smoothed)], y=test_pred_smoothed.flatten(),
-                                        mode='lines', name='LSTM Forecast (Smoothed)', 
-                                        line=dict(color='red', dash='dot')))
-        # Для Case 2 прогноз на 3 месяца
-        if self.case == 2:
-            test_start = self.train_df['Date'].max() + pd.Timedelta(days=1)
-            test_end = test_start + pd.DateOffset(months=3) - pd.Timedelta(days=1)
-            test_mask = (self.test_df['Date'] >= test_start) & (self.test_df['Date'] <= test_end)
-            prediction_end = self.test_df['Date'].max() + pd.DateOffset(months=3)
-            prediction_dates = pd.date_range(start=self.test_df['Date'].min(), end=prediction_end, freq='5D')
-            # Тестовые NDVI
-            fig.add_trace(go.Scatter(x=self.test_df.loc[test_mask, 'Date'], y=self.test_df.loc[test_mask, 'NDVI'], 
-                                    mode='lines+markers', name='Actual NDVI (Filtered+Interpolated)', 
-                                    line=dict(color='lightblue')))
-            fig.add_trace(go.Scatter(x=self.test_df.loc[test_mask, 'Date'], y=self.test_df.loc[test_mask, 'NDVI_Smoothed'], 
-                                    mode='lines', name='Actual NDVI (Smoothed)', 
-                                    line=dict(color='blue')))
-            # Прогнозы
-            if test_pred_original is not None and len(test_pred_original) > 0:
-                fig.add_trace(go.Scatter(x=prediction_dates[:len(test_pred_original)], y=test_pred_original.flatten(),
-                                        mode='lines', name='LSTM Forecast (Filtered+Interpolated)', 
-                                        line=dict(color='orange', dash='dot')))
-            if test_pred_smoothed is not None and len(test_pred_smoothed) > 0:
-                fig.add_trace(go.Scatter(x=prediction_dates[:len(test_pred_smoothed)], y=test_pred_smoothed.flatten(),
-                                        mode='lines', name='LSTM Forecast (Smoothed)', 
-                                        line=dict(color='red', dash='dot')))
-            fig.add_trace(go.Scatter(x= self.baseline_df['Date'], y=self.baseline_df['Historical_Avg_NDVI'], 
-                                        mode='lines+markers', name='Avg Historical Baseline (Filtered+Interpolated)', 
-                                        line=dict(color='cyan', dash='dash')))
-            fig.add_trace(go.Scatter(x= self.baseline_df['Date'], y=self.baseline_df['Historical_Avg_NDVI_Smoothed'], 
-                                    mode='lines', name='Avg Historical Baseline (Smoothed)', 
-                                    line=dict(color='purple', dash='dash')))
-        # Прогноз
-        if self.case == 3:
-            if forecast_pred_original is not None and len(forecast_pred_original) > 0:
-                forecast_dates = pd.date_range(start=self.forecast_dates[0], periods=len(forecast_pred_original), freq='5D')
-                fig.add_trace(go.Scatter(x=forecast_dates, y=forecast_pred_original.flatten(), 
-                                        mode='lines', name='LSTM Forecast (Filtered+Interpolated)', 
-                                        line=dict(color='orange', dash='dot')))
-            if forecast_pred_smoothed is not None and len(forecast_pred_smoothed) > 0:
-                forecast_dates = pd.date_range(start=self.forecast_dates[0], periods=len(forecast_pred_smoothed), freq='5D') 
-                fig.add_trace(go.Scatter(x=forecast_dates, y=forecast_pred_smoothed.flatten(), 
-                                        mode='lines', name='LSTM Forecast (Smoothed)', 
-                                        line=dict(color='red', dash='dot')))
-            # Исторический baseline
-            all_dates = pd.date_range(start=self.forecast_dates[0], periods=len(forecast_pred_original), freq='5D') # до 6 месяцев
-            self.baseline_df = self.create_historical_baseline(all_dates)
-            fig.add_trace(go.Scatter(x=self.baseline_df['Date'], y=self.baseline_df['Historical_Avg_NDVI'], 
-                                    mode='lines+markers', name='Avg Historical Baseline (Filtered+Interpolated)', 
-                                    line=dict(color='cyan', dash='dash')))
-            fig.add_trace(go.Scatter(x=self.baseline_df['Date'], y=self.baseline_df['Historical_Avg_NDVI_Smoothed'], 
-                                    mode='lines', name='Avg Historical Baseline (Smoothed)', 
-                                    line=dict(color='purple', dash='dash')))
-        fig.update_layout(
-            title=f"NDVI Analysis - Case {self.case}",
-            xaxis_title="Date",
-            yaxis_title="NDVI",
-            legend_title="Legend",
-            legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="right", x=1)
+class NDVIForecaster:
+    """Главный класс для прогнозирования NDVI"""
+    
+    def __init__(self, config_path: str = CONFIG_FILE):
+        print("🌿 Инициализация системы прогнозирования NDVI")
+        print("=" * 60)
+        
+        # Загрузка конфигурации
+        self.config = ConfigManager.load_config(config_path)
+        ConfigManager.validate_config(self.config)
+        
+        # Извлечение параметров
+        self.coordinates = [tuple(coord) for coord in self.config["coordinates"]]
+        self.start_date = self.config["start_date"]
+        self.end_date = self.config["end_date"]
+        self.n_steps_in = self.config["n_steps_in"]
+        self.n_steps_out = self.config["n_steps_out"]
+        self.percentile = self.config.get("percentile", 40)
+        self.bimonthly_period = self.config.get("bimonthly_period", "2M")
+        self.spline_smoothing = self.config.get("spline_smoothing", 0.7)
+        
+        # Инициализация компонентов
+        self.data_manager = DataManager(self.coordinates)
+        self.model_trainer = ModelTrainer(ModelConfig())
+        
+        # Данные и модели
+        self.merged_df = None
+        self.model_original = None
+        self.model_filtered = None
+        
+        print("✅ Система инициализирована")
+        print("=" * 60)
+    
+    def load_and_process_data(self) -> None:
+        """Загружает и обрабатывает все данные"""
+        print("\n📡 ЗАГРУЗКА И ОБРАБОТКА ДАННЫХ")
+        print("=" * 40)
+        
+        # Получение данных
+        ndvi_df = self.data_manager.get_ndvi_data(self.start_date, self.end_date)
+        weather_df = self.data_manager.get_weather_data(self.start_date, self.end_date)
+        
+        # Обработка и объединение
+        self.merged_df = self.data_manager.process_data(
+            ndvi_df, weather_df, 
+            self.percentile, self.bimonthly_period, self.spline_smoothing
         )
-        fig.show()
+        
+        # Статистика финальных данных
+        print(f"\n📊 ФИНАЛЬНАЯ СТАТИСТИКА ДАННЫХ:")
+        print(f"   📅 Период: {self.merged_df['Date'].min()} - {self.merged_df['Date'].max()}")
+        print(f"   📋 Записей: {len(self.merged_df)}")
+        
+        ndvi_stats = self.merged_df['NDVI'].describe()
+        print(f"   🌿 NDVI: min={ndvi_stats['min']:.3f}, max={ndvi_stats['max']:.3f}, mean={ndvi_stats['mean']:.3f}")
+        
+        smoothed_stats = self.merged_df['NDVI_Smoothed'].describe()
+        print(f"   🌿 NDVI (сглаж): min={smoothed_stats['min']:.3f}, max={smoothed_stats['max']:.3f}, mean={smoothed_stats['mean']:.3f}")
+    
+    def train_models(self) -> None:
+        """Обучает модели"""
+        if self.merged_df is None:
+            raise ValueError("Сначала загрузите данные с помощью load_and_process_data()")
+        
+        print("\n🧠 ОБУЧЕНИЕ МОДЕЛЕЙ")
+        print("=" * 40)
+        
+        # Подготовка последовательностей
+        X, y_original, y_smoothed, input_size = self.data_manager.prepare_sequences(
+            self.merged_df, self.n_steps_in, self.n_steps_out
+        )
+        
+        if len(X) == 0:
+            raise ValueError("Недостаточно данных для создания последовательностей")
+        
+        # Создание и обучение моделей
+        self.model_original = self.model_trainer.create_model(input_size)
+        self.model_filtered = self.model_trainer.create_model(input_size)
+        
+        self.model_original = self.model_trainer.train_model(
+            self.model_original, X, y_original, "Original"
+        )
+        self.model_filtered = self.model_trainer.train_model(
+            self.model_filtered, X, y_smoothed, "Smoothed"
+        )
+        
+        # Сохранение
+        self.model_trainer.save_models(self.model_original, self.model_filtered)
+    
+    def run_training_pipeline(self) -> None:
+        """Выполняет полный пайплайн обучения"""
+        print("🚀 ЗАПУСК ПОЛНОГО ПАЙПЛАЙНА ОБУЧЕНИЯ")
+        print("=" * 60)
+        
+        start_time = datetime.now()
+        
+        try:
+            self.load_and_process_data()
+            self.train_models()
+            
+            end_time = datetime.now()
+            duration = end_time - start_time
+            
+            print("\n" + "=" * 60)
+            print("✅ ОБУЧЕНИЕ УСПЕШНО ЗАВЕРШЕНО!")
+            print(f"⏱️  Время выполнения: {duration}")
+            print(f"📁 Веса сохранены в: {WEIGHTS_DIR}/")
+            print("=" * 60)
+            
+        except Exception as e:
+            print(f"\n❌ ОШИБКА: {e}")
+            raise
+
+# ===================== ГЛАВНАЯ ФУНКЦИЯ =====================
 
 def main():
-    import json
-    import os
-    # Загрузка параметров из файла конфигурации
-    config_path = "configs/config_ndvi.json"
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Файл конфигурации {config_path} не найден. Пожалуйста, создайте его.")
-
-    with open(config_path, "r") as f:
-        config = json.load(f)
-
-    coordinates = [tuple(coord) for coord in config["coordinates"]]
-    start_date = config["start_date"]
-    end_date = config["end_date"]
-    n_steps_in = config.get("n_steps_in", 72)
-    n_steps_out = config.get("n_steps_out", 18)
-    percentile = config.get("percentile", 55)
-    bimonthly_period = config.get("bimonthly_period", "2M")
-    spline_smoothing = config.get("spline_smoothing", 0.96)
-
-    print("Выбранные параметры из файла конфигурации:")
-    print(f"  coordinates: {coordinates}")
-    print(f"  start_date: {start_date}")
-    print(f"  end_date: {end_date}")
-    print(f"  n_steps_in: {n_steps_in}")
-    print(f"  n_steps_out: {n_steps_out}")
-    print(f"  percentile: {percentile}")
-    print(f"  bimonthly_period: {bimonthly_period}")
-    print(f"  spline_smoothing: {spline_smoothing}")
-    
-    # Создание экземпляра NDVIForecaster с параметрами пользователя
-    forecaster = NDVIForecaster(
-        coordinates=coordinates,
-        end_date=end_date,
-        start_date=start_date,
-        n_steps_in=n_steps_in,
-        n_steps_out=n_steps_out,
-        percentile=percentile,
-        bimonthly_period=bimonthly_period,
-        spline_smoothing=spline_smoothing
-    )
-    
-    print("Initializing Earth Engine...")
-    forecaster.initialize_ee()
-
-    print("Calculating data range...")
-    start_date = pd.Timestamp(start_date)
-    end_date = pd.Timestamp(end_date)
-
-    print("Fetching NDVI data...")
-    ndvi_timeseries = forecaster.get_ndvi_timeseries(start_date, end_date)
-    forecaster.extract_ndvi_data(ndvi_timeseries)
-
-    print("Fetching weather data...")
-    forecaster.get_weather_data(start_date, end_date)
-    
-    print("Merging and preparing data...")
-    forecaster.merge_data()
-    forecaster.prepare_data()
-    
-    print("Training models with pre-configured hyperparameters...")
-    forecaster.train_models()
-
-    # Сохраняем веса моделей
-    os.makedirs("weights", exist_ok=True)
-    torch.save(forecaster.model_original.state_dict(), "weights/model_weights_original.pth")
-    torch.save(forecaster.model_filtered.state_dict(), "weights/model_weights_filtered.pth")
-    print("Веса моделей сохранены в папке weights/")
+    """Главная функция"""
+    try:
+        forecaster = NDVIForecaster()
+        forecaster.run_training_pipeline()
+        
+    except KeyboardInterrupt:
+        print("\n⏹️  Обучение прервано пользователем")
+    except Exception as e:
+        print(f"\n💥 Критическая ошибка: {e}")
+        raise
 
 if __name__ == "__main__":
-    main()
+    main() 
