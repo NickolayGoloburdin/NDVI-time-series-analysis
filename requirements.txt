@@ -2,7 +2,12 @@ earthengine-api
 pandas
 numpy
 plotly
-torch==2.3.0+cu121
+torch==2.6.0
 scikit-learn
 scipy
 requests
+openmeteo-requests
+requests-cache
+retry-requests
+matplotlib
+kaleido
